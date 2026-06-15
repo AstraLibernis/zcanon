@@ -53,30 +53,36 @@ Install paths for the skill (pick one):
 - `zsnag` (Zig) — 10 verified LLM-mistake rules, tokenizer-based; validated on real third-party code
 - `zfind` (Nushell) — semantic search with use-case→mechanism query rephrasing
 - `zindex` (Nushell) — index builder, fed by `zfact --dump`
-- `zhook` (Nushell) — automatic, reversible PostToolUse checker
+- `zhook` (Nushell) — automatic, reversible PostToolUse checker; **logs every finding to the book**
+- `zbook` (Nushell) — reads the book (`zig_log`): real mistakes ranked by frequency
 - `skill/SKILL.md` — the behavioral instruction
 
+**The book (why, and why NOT synthetic).** We considered generating flawed Zig — from a
+script, then from a small local model — and mining the failures. Both are dead ends for
+the actual goal: a script only reproduces flaws we wrote into it, and a small model makes
+*its* mistakes ("doesn't understand the language"), not the deployment model's ("this API
+moved since training"). Wrong mistakes → noise. The correct generator already exists: the
+hook, running on real edits by the real model. So `zhook` now records every finding to
+`zig_log` with the offending source line, and `zbook` reads it back. Frequency is the
+signal — no synthesis, judged by the compiler. Honest limit (unchanged): this never makes
+the model reason better; it turns accumulated real findings into better *context* (which
+APIs to surface in the skill, which `zsnag` rules earn their keep).
+
 **Next (in rough order of value)**
-1. **Harden the skill** — tune the wording so the model reliably uses the tools without
+1. **Accumulate the book on real work**, then read it: the most frequent rules/APIs become
+   a short cheat-sheet baked into `skill/SKILL.md`, shifting correction from reactive
+   (hook catches me) to proactive (skill warns me first).
+2. **Harden the skill** — tune the wording so the model reliably uses the tools without
    over-calling them. Measure by dogfooding on real Zig tasks.
-2. **Precise `zsnag` (full-AST version)** — `zsnag` already uses the real Zig tokenizer;
+3. **Precise `zsnag` (full-AST version)** — `zsnag` already uses the real Zig tokenizer;
    upgrade the heuristic rules (R006/R008) to `std.zig.Ast` (the parse tree) to cut the
    last text-pattern false positives.
-3. **Generate→test→mine loop** — generate Zig with a model, compile/test it, and let the
-   compiler/tests label the failures. The most common failures become new `zsnag` rules
-   or `zfact` entries. This data-drives the rule set instead of hand-curation, and it is
-   LLM-specific (it learns *the model's* mistakes, not humans').
-   - Seeded by `nu/zgremlin.nu`: emits plausible-but-flawed Zig in three classes (mangled
-     formatting, incorrect closing, logic dead-ends) and reports which checker catches each.
-     It already pinpoints the target: formatting/structure errors are caught by
-     `zig fmt`/`zig ast-check`, but **logic dead-ends slip past every existing checker** —
-     that is the class the mine loop must learn to detect.
-4. **Bundle as one installable unit** — a single `install.sh` that wires tools + hook +
-   skill + index in one step, so "copy home, settle on Claude" is literally one command.
+4. **Bundle as one installable unit** — a single installer that wires tools + hook + skill
+   + index + book in one step, so "copy home, settle on Claude" is literally one command.
 
 **Stretch — give back to Zig**
-The mine loop produces data on which mistakes are most common and where the compiler's
-error messages are cryptic. That is a concrete, grounded contribution to the Zig project:
+The book accumulates data on which mistakes are most common and where the compiler's error
+messages are cryptic. That is a concrete, grounded contribution to the Zig project:
 **propose clearer compiler diagnostics upstream**, backed by frequency data. (Not
 "AI auto-fixes Zig" — that is a research problem, not a promise.)
 

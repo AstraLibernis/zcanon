@@ -66,3 +66,8 @@ export def psql-query [sql: string] {
 export def psql-exec [sql: string] {
     $sql | ^psql (dsn) -q -v ON_ERROR_STOP=1
 }
+
+# Run a SELECT and get back parsed records (wraps the query as json_agg).
+export def psql-json [sql: string] {
+    psql-query $"SELECT coalesce\(json_agg\(row_to_json\(t)),'[]'::json) FROM \(($sql)) t" | from json
+}

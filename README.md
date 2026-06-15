@@ -28,11 +28,16 @@ itself); the glue that talks to ollama and postgres is written **in Nushell**.
 | `zig-out/bin/zsnag` | Zig | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
 | `nu/zfind.nu` | Nushell | Find an API **by concept** when you don't know the name (semantic search, with query rephrasing) | ollama + postgres index |
 | `nu/zindex.nu` | Nushell | Build the semantic search index (`sql/schema_zig_api.sql`) via `zfact --dump` | ollama + postgres |
-| `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` automatically when a `.zig` file is edited, and feed findings back to the model | Claude Code |
+| `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` on every `.zig` edit, feed findings back to the model, **and log them to the book** | Claude Code (+ postgres for the book) |
+| `nu/zbook.nu` | Nushell | Read **the book** — the corpus of real mistakes the hook captured live, ranked by frequency | postgres |
 | `skill/SKILL.md` | — | The instruction that makes the model actually *reach for* these every session | Claude Code |
 
-The two Zig binaries need no dependencies and are always-current. `zfind`/`zindex` add an
-optional semantic layer (local ollama embeddings + postgres/pgvector).
+The two Zig binaries need no dependencies and are always-current. The rest use a local
+**library** (postgres) holding two books: the std-API index (`zig_api`, built by
+`zindex`, searched by `zfind`) and the live mistake log (`zig_log`, written by `zhook`,
+read by `zbook`). The mistake log is the honest version of "learn the model's blind
+spots": it records what the model *actually* gets wrong on real edits, judged by the
+compiler — no synthetic generation, no guessing.
 
 ## Install
 
@@ -52,6 +57,10 @@ nu nu/zhook.nu --install   # adds a PostToolUse hook to ~/.claude/settings.json 
 psql ... -f sql/schema_zig_api.sql     # one-time table
 nu nu/zindex.nu                        # build the index (needs `ollama serve`)
 nu nu/zfind.nu "hash a password"
+
+# 4. the book — log real mistakes the hook catches, then read them back:
+psql ... -f sql/schema_zig_log.sql     # one-time table; the hook fills it as you work
+nu nu/zbook.nu                         # table of contents, ranked by frequency
 ```
 
 The hook is fully reversible: `nu nu/zhook.nu --disable` / `--enable` toggle it with no
@@ -77,8 +86,8 @@ in `PLAN.md`.
 
 ```
 src/      the Zig tools (zfact.zig, zsnag.zig) + build.zig
-nu/       the Nushell glue (zfind, zindex, zhook, test, lib)
-sql/      the semantic-index table schema
+nu/       the Nushell glue (zfind, zindex, zhook, zbook, test, lib)
+sql/      the library schemas (zig_api index, zig_log book)
 skill/    SKILL.md — the instruction that wires the tools into how the model writes Zig
 test_fixtures/  smoke + false-positive regression fixtures
 docs/     component notes

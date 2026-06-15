@@ -11,6 +11,8 @@
 #   nu zhook.nu --install       add the hook to ~/.claude/settings.json (backs up first)
 #   nu zhook.nu --uninstall     remove ONLY our entry; leave other settings intact
 
+use lib.nu *
+
 const MARKER = "zforge-zig-hook"
 
 def here   [] { $env.FILE_PWD }
@@ -77,6 +79,27 @@ def do-uninstall [] {
     print $"Removed our hook from ($sp). Other settings untouched."
 }
 
+# ---- writing the book (postgres) -----------------------------------------
+def sql-str [s: string] { "'" + ($s | str replace --all "'" "''") + "'" }
+def line-at [lines: list, ln: int] {
+    let i = ($ln - 1)
+    if ($i >= 0) and ($i < ($lines | length)) { ($lines | get $i | str trim) } else { "" }
+}
+
+def log-book [fp: string, ver: string, findings: list, ast_errs: list, src: list] {
+    let rows = ($findings | each {|f|
+        let snip = (line-at $src $f.line)
+        "(" + ([(sql-str $ver) (sql-str $fp) (sql-str $f.rule) (sql-str $f.severity) ($f.line | into string) ($f.col | into string) (sql-str $f.message) (sql-str $snip)] | str join ",") + ")"
+    })
+    let arows = ($ast_errs | each {|e|
+        let snip = (line-at $src ($e.line | into int))
+        "(" + ([(sql-str $ver) (sql-str $fp) "'ast-check'" "'error'" $e.line $e.col (sql-str $e.message) (sql-str $snip)] | str join ",") + ")"
+    })
+    let all = ($rows | append $arows)
+    if ($all | is-empty) { return }
+    psql-exec ("INSERT INTO zig_log (zig_version,file,rule,severity,line,col,message,snippet) VALUES " + ($all | str join ","))
+}
+
 # ---- the hook itself -----------------------------------------------------
 def run-hook [] {
     if ((flag) | path exists) { return }          # disabled: silent no-op
@@ -85,21 +108,37 @@ def run-hook [] {
     let fp = ($data | get tool_input?.file_path? | default "")
     if (not ($fp | str ends-with ".zig")) or (not ($fp | path exists)) { return }
 
-    mut findings = []
-    let zs = (zsnag)
-    if ($zs | path exists) {
-        let r = (^$zs $fp | complete)
-        let out = ([$r.stdout, $r.stderr] | str join | str trim)
-        if not ($out | is-empty) { $findings = ($findings | append $out) }
-    }
-    let ac = (^zig ast-check $fp | complete)
-    if ($ac.exit_code != 0) and (not ($ac.stderr | str trim | is-empty)) {
-        $findings = ($findings | append $"zig ast-check:\n($ac.stderr | str trim)")
-    }
-    if ($findings | is-empty) { return }
+    let src = (try { open --raw $fp | lines } catch { [] })
 
+    # zsnag findings, structured (--json; zsnag writes to stderr)
+    let zs = (zsnag)
+    let findings = (if ($zs | path exists) {
+        let r = (^$zs --json $fp | complete)
+        ([$r.stdout, $r.stderr] | str join "\n" | lines
+            | where {|l| ($l | str trim) | str starts-with "{" }
+            | each {|l| try { $l | from json } catch { null } }
+            | where {|x| $x != null })
+    } else { [] })
+
+    # zig ast-check errors
+    let ac = (^zig ast-check $fp | complete)
+    let ast_errs = (if ($ac.exit_code != 0) {
+        ($ac.stderr | lines | parse --regex '^(?<file>[^:]+):(?<line>\d+):(?<col>\d+): error: (?<message>.+)$')
+    } else { [] })
+
+    if (($findings | is-empty) and ($ast_errs | is-empty)) { return }
+
+    # write to the book — best-effort, never let logging break the hook
+    try {
+        let ver = (try { (zig-env).ver } catch { "?" })
+        log-book $fp $ver $findings $ast_errs $src
+    }
+
+    # feed the findings back to me
+    let flines = ($findings | each {|f| $"[($f.rule) ($f.severity)] ($fp | path basename):($f.line):($f.col)  ($f.message)" })
+    let alines = ($ast_errs | each {|e| $"[ast-check] ($fp | path basename):($e.line):($e.col)  ($e.message)" })
     let ctx = ($"zfact/zsnag checked ($fp | path basename) and flagged issues — please review and fix:\n\n" +
-        ($findings | str join "\n\n") +
+        (($flines | append $alines) | str join "\n") +
         "\n\n\(Confirm current APIs with `zfact <symbol>` before changing.)")
     {hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: ($ctx | str substring 0..9000)}} | to json
 }
