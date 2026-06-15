@@ -20,7 +20,7 @@ truth, never the model's memory.
 ## The pieces
 
 The tools that read and judge Zig source are written **in Zig** (the project dogfoods
-itself); the glue that talks to ollama and postgres is written **in Nushell**. No Python.
+itself); the glue that talks to ollama and postgres is written **in Nushell**.
 
 | Tool | Lang | Job | Needs |
 |------|------|-----|-------|

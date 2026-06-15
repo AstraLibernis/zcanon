@@ -55,8 +55,6 @@ Install paths for the skill (pick one):
 - `zindex` (Nushell) — index builder, fed by `zfact --dump`
 - `zhook` (Nushell) — automatic, reversible PostToolUse checker
 - `skill/SKILL.md` — the behavioral instruction
-- **Refactor to Zig + Nushell, Python eliminated** — Zig-source analysis is in Zig (it
-  dogfoods the project); ollama/postgres glue is in Nushell.
 
 **Next (in rough order of value)**
 1. **Harden the skill** — tune the wording so the model reliably uses the tools without

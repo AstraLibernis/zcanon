@@ -168,8 +168,8 @@ surfaced two false-positive classes (method-named `async`/`await`; `init()` of t
   version-stamped, rebuildable index (`zindex`); live std stays the source of truth.
 - **Phase 2 — Claude Code hook** (`zhook`, `PostToolUse` on `.zig` edits → `zsnag` +
   `ast-check`, findings injected back): done, reversible, installed.
-- **Refactor to Zig + Nushell** (Python eliminated): done. `zfact`/`zsnag` are Zig;
-  `zfind`/`zindex`/`zhook`/`test` are Nushell.
+- **Implementation:** `zfact`/`zsnag` are Zig (they read and judge Zig source);
+  `zfind`/`zindex`/`zhook`/`test` are Nushell (ollama + postgres + hook glue).
 
 Verified against: Zig 0.16.0 / Nushell 0.99.1, std at `/usr/lib/zig/std`, 2026-06-15.
 `nu nu/test.nu` = 26 checks.
