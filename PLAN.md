@@ -66,6 +66,11 @@ Install paths for the skill (pick one):
    compiler/tests label the failures. The most common failures become new `zsnag` rules
    or `zfact` entries. This data-drives the rule set instead of hand-curation, and it is
    LLM-specific (it learns *the model's* mistakes, not humans').
+   - Seeded by `nu/zgremlin.nu`: emits plausible-but-flawed Zig in three classes (mangled
+     formatting, incorrect closing, logic dead-ends) and reports which checker catches each.
+     It already pinpoints the target: formatting/structure errors are caught by
+     `zig fmt`/`zig ast-check`, but **logic dead-ends slip past every existing checker** —
+     that is the class the mine loop must learn to detect.
 4. **Bundle as one installable unit** — a single `install.sh` that wires tools + hook +
    skill + index in one step, so "copy home, settle on Claude" is literally one command.
 
