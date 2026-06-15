@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""
+zsnag — catch the mistakes an LLM tends to make writing Zig 0.16.
+
+Reads .zig files and flags 10 specific patterns (verified against the installed std,
+2026-06-15). Not a general linter — the compiler already does that. This targets the
+stale-knowledge and footgun mistakes an AI produces.
+
+  zsnag file.zig [more.zig ...]     check files (human-readable)
+  zsnag --json file.zig             machine-readable findings
+Exit code is non-zero if any 'error'-severity finding is present.
+
+Detection is text-based: string contents and // comments are ignored, but it does not
+fully parse Zig. Rules marked (heuristic) look at nearby lines and may miss or over-flag.
+"""
+import sys, os, re, json
+
+STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+
+def code_only(line):
+    """Blank out string contents and strip // comments so we match real code."""
+    line = STRING_RE.sub('""', line)
+    i = line.find("//")
+    return line[:i] if i != -1 else line
+
+def scan(path):
+    raw = open(path, errors="replace").read().splitlines()
+    code = [code_only(l) for l in raw]
+    out = []  # (line, col, rule, severity, message)
+    def add(i, m, rule, sev, msg):
+        col = (m.start() + 1) if m else 1
+        out.append((i + 1, col, rule, sev, msg))
+
+    for i, ln in enumerate(code):
+        # not after '.' or a word char → keyword position, not a method/field named async
+        m = re.search(r'(?<![.\w])(async|await)\b', ln)
+        if m: add(i, m, "R001", "error", f"`{m.group(1)}` is no longer a keyword (old Zig). As a method call (`.{m.group(1)}(`) it's fine — this is keyword-position use.")
+
+        m = re.search(r'(?<![.\w])usingnamespace\b', ln)
+        if m: add(i, m, "R002", "error", "`usingnamespace` was removed. Import/redeclare explicitly.")
+
+        m = re.search(r'\b(?:std\.)?mem\.(copy|set)\s*\(', ln)
+        if m: add(i, m, "R003", "error", f"`mem.{m.group(1)}` was removed — use @memcpy/@memset.")
+
+        m = re.search(r'\bcatch\s+unreachable\b', ln)
+        if m: add(i, m, "R004", "warn", "`catch unreachable` crashes in release if the call ever fails. Handle the error.")
+
+        m = re.search(r'\bcatch\s*\{\s*\}', ln)
+        if m: add(i, m, "R005", "warn", "Empty `catch {}` silently swallows an error.")
+
+        m = re.search(r'@(intCast|ptrCast|alignCast)\s*\(', ln)
+        if m: add(i, m, "R007", "info", f"@{m.group(1)} can panic/corrupt if the value is out of range — verify it first.")
+
+        m = re.search(r'\bstd\.heap\.page_allocator\b', ln)
+        if m: add(i, m, "R009", "info", "page_allocator as a general allocator is slow — pass an allocator in.")
+
+        m = re.search(r'\b(?:std\.)?debug\.print\s*\(', ln)
+        if m: add(i, m, "R010", "info", "`debug.print` left in code? Remove or switch to std.log.")
+
+    # R006 (heuristic): stream() result == 0 treated as done
+    for i, ln in enumerate(code):
+        a = re.search(r'\b(\w+)\s*=\s*[^=].*\bstream\w*\s*\(', ln)
+        if not a:
+            continue
+        var = a.group(1)
+        for j in range(i, min(i + 4, len(code))):
+            cond = re.search(rf'\bif\s*\(\s*{re.escape(var)}\s*==\s*0', code[j])
+            # only the SAME line as the condition — avoids blaming an unrelated
+            # break/return on a following line (the canonical bug is `if (n==0) break;`)
+            if cond and re.search(r'\b(break|return)\b', code[j]):
+                out.append((j + 1, cond.start() + 1, "R006", "warn",
+                            "stream() returning 0 means 'switched modes', NOT end-of-stream — use `continue`, not break/return. (heuristic)"))
+                break
+
+    # R008 (heuristic): acquired but never released anywhere in the file.
+    # Only trip for types that actually HAVE a deinit (text can't know types, so use
+    # an allowlist) — avoids flagging FixedBufferAllocator, counting writers, etc.
+    NEEDS_DEINIT = ("ArrayList", "MultiArrayList", "HashMap", "ArrayHashMap", "BufSet",
+                    "BufMap", "PriorityQueue", "SegmentedList", "ArenaAllocator",
+                    "GeneralPurposeAllocator", "DebugAllocator")
+    acq = {}
+    for i, ln in enumerate(code):
+        m = re.search(r'\b(?:var|const)\s+(\w+)\s*=', ln)
+        if not m:
+            continue
+        var = m.group(1)
+        if re.search(r'\.init\w*\s*\(', ln) and any(t in ln for t in NEEDS_DEINIT):
+            acq.setdefault(var, (i, m.start(), "deinit"))
+        elif re.search(r'\.(openFile|createFile)\s*\(', ln):
+            acq.setdefault(var, (i, m.start(), "close"))
+    blob = "\n".join(code)
+    for var, (i, col, rel) in acq.items():
+        if not re.search(rf'\b{re.escape(var)}\.{rel}\s*\(', blob):
+            out.append((i + 1, col + 1, "R008", "warn",
+                        f"`{var}` is acquired but `{var}.{rel}()` never appears — likely a leak. Add `defer {var}.{rel}()`. (heuristic)"))
+
+    out.sort()
+    return out
+
+def main(argv):
+    as_json = "--json" in argv
+    files = [a for a in argv if not a.startswith("-")]
+    if not files:
+        print(__doc__); return 2
+    allf, worst = [], 0
+    for f in files:
+        if not os.path.isfile(f):
+            print(f"not a file: {f}"); continue
+        for (line, col, rule, sev, msg) in scan(f):
+            allf.append({"file": f, "line": line, "col": col, "rule": rule,
+                         "severity": sev, "message": msg})
+            if sev == "error": worst = 1
+
+    if as_json:
+        print(json.dumps(allf, indent=2))
+    else:
+        if not allf:
+            print("clean — no LLM footguns found"); return 0
+        for x in allf:
+            tag = {"error": "✗", "warn": "▲", "info": "·"}[x["severity"]]
+            print(f"{tag} {x['file']}:{x['line']}:{x['col']}  [{x['rule']} {x['severity']}]  {x['message']}")
+        print(f"\n{len(allf)} finding(s)")
+    return worst
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

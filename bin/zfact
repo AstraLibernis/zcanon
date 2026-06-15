@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""
+zfact — current Zig std API fact-checker (zero-dep).
+
+Resolves a std symbol to its CURRENT signature + doc comment from THIS install's
+std source, to override an AI's stale knowledge of a fast-churning language.
+
+  zfact Io.Reader.stream      signature of stream() under Io/Reader
+  zfact ArrayList.append      both managed + unmanaged variants
+  zfact crypto.ChaCha20       type/const definitions
+  zfact stream                bare symbol, searched std-wide (noisier)
+  zfact ArrayList.append --sig  signatures only, suppress the cluster (hook mode)
+  zfact find "hash a password"  Layer B: semantic search by CONCEPT (needs the index)
+
+`find` uses the embedding index built by `zfact-index` (ollama + postgres/pgvector).
+It answers "what does X?" when you don't know the name; pipe a result back into a
+plain `zfact <symbol>` for the exact signature + cluster. Pure-lookup commands above
+stay zero-dependency; only `find` needs ollama + postgres.
+
+By default `find` first rephrases your query from use-case wording into the std's
+mechanism vocabulary using a local model (qwen2.5-coder) — reasoning in front of
+similarity — so "read a line from stdin" actually finds the delimiter readers. Pass
+`--raw` to skip that step when your query is already phrased mechanistically.
+
+Beyond the signature, it prints a "neighborhood" cluster (Layer A) so the caller
+builds GROUPED knowledge, not just one fact:
+  - family:   name siblings sharing the camelCase stem (append -> appendSlice ...)
+  - see also: identifiers the doc comment cross-references (`getOrPut`)
+  - notes:    efficiency signals (AssumeCapacity/Unmanaged variants, "use X instead")
+
+Textual resolution (grep), not semantic: it finds `pub fn`/`pub const` by name,
+scoped to files matching the namespace. Follows ONE hop of @import re-export or
+same-file alias to show the underlying signature; does not recurse further.
+"""
+import sys, os, re, subprocess, glob, json
+
+def std_dir():
+    env = os.getenv("ZFACT_STD")
+    if env:
+        return env
+    try:
+        out = subprocess.check_output(["zig", "env"], text=True)
+        m = re.search(r'\.std_dir\s*=\s*"([^"]+)"', out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "/usr/lib/zig/std"
+
+def camel_to_snake(s):
+    return re.sub(r'(?<!^)(?=[A-Z])', '_', s).lower()
+
+def candidate_files(std, parts):
+    """Files/dirs likely to hold `parts` (namespace hints), best-effort."""
+    roots = set()
+    for p in parts:
+        for cand in (p, p + ".zig", camel_to_snake(p), camel_to_snake(p) + ".zig"):
+            full = os.path.join(std, cand)
+            if os.path.isfile(full):
+                roots.add(full)
+            elif os.path.isdir(full):
+                roots.update(glob.glob(os.path.join(full, "**", "*.zig"), recursive=True))
+    return roots
+
+def all_zig(std):
+    return glob.glob(os.path.join(std, "**", "*.zig"), recursive=True)
+
+DECL = lambda sym: re.compile(
+    r'^\s*pub\s+(?:fn|const|var)\s+' + re.escape(sym) + r'\b'
+)
+# fuzzy: the symbol appears anywhere in the declared name (e.g. ChaCha20 -> ChaCha20IETF)
+DECL_FUZZY = lambda sym: re.compile(
+    r'^\s*pub\s+(?:fn|const|var)\s+\w*' + re.escape(sym) + r'\w*\b'
+)
+
+def doc_above(lines, idx):
+    """Collect /// doc-comment lines immediately above line idx."""
+    docs = []
+    j = idx - 1
+    while j >= 0 and lines[j].lstrip().startswith("///"):
+        docs.insert(0, lines[j].strip())
+        j -= 1
+    return docs
+
+IMPORT_RE = re.compile(r'@import\(\s*"([^"]+)"\s*\)\s*(?:\.\s*(\w+))?')
+ALIAS_RE  = re.compile(r'^\s*pub\s+const\s+\w+\s*=\s*([A-Za-z_]\w*)')
+_ALIAS_SKIP = {"error", "struct", "enum", "union", "opaque", "extern", "packed"}
+
+def resolve_reexport(sig, abs_file, std):
+    """One hop: follow `= @import(...).Member` or a same-file `= Base` alias."""
+    m = IMPORT_RE.search(sig)
+    if m:
+        imp, member = m.group(1), m.group(2)
+        target = os.path.normpath(os.path.join(os.path.dirname(abs_file), imp))
+        if not os.path.isfile(target):
+            alt = os.path.normpath(os.path.join(std, imp))
+            target = alt if os.path.isfile(alt) else target
+        if not os.path.isfile(target):
+            return None
+        if member:
+            h = search([target], member, std, DECL(member))
+            return ("via @import", h[0]) if h else None
+        rel = os.path.relpath(target, std)
+        return ("namespace file", (rel, 1, f"(whole-file namespace → {rel})", []))
+    m = ALIAS_RE.match(sig)
+    if m and m.group(1) not in _ALIAS_SKIP:
+        base = m.group(1)
+        h = search([abs_file], base, std, DECL(base))
+        if h:
+            return (f"alias of {base}", h[0])
+    return None
+
+def search(files, sym, std, pat):
+    hits = []
+    for f in files:
+        try:
+            lines = open(f, errors="replace").read().splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines):
+            if pat.match(line):
+                rel = os.path.relpath(f, std)
+                hits.append((rel, i + 1, line.strip(), doc_above(lines, i)))
+    return hits
+
+BACKTICK_RE = re.compile(r'`([A-Za-z_]\w*)`')
+PUBNAME_RE  = re.compile(r'^\s*pub\s+(?:fn|const|var)\s+([A-Za-z_]\w*)')
+
+def camel_base(name):
+    """Leading camelCase token, lowercased — append/appendSlice -> 'append'."""
+    m = re.match(r'[a-z][a-z0-9]*', name) or re.match(r'[A-Z][a-z0-9]*', name)
+    return (m.group(0) if m else name).lower()
+
+def file_pub_names(abs_file):
+    names = []
+    try:
+        for line in open(abs_file, errors="replace"):
+            m = PUBNAME_RE.match(line)
+            if m:
+                names.append(m.group(1))
+    except OSError:
+        pass
+    return names
+
+def neighborhood(std, hits, sym):
+    """Layer A cluster: name family, doc cross-refs, efficiency signals."""
+    base = camel_base(sym)
+    files = []
+    for h in hits:
+        af = os.path.join(std, h[0])
+        if af not in files:
+            files.append(af)
+
+    fam = set()
+    if len(base) >= 3:
+        for af in files:
+            for n in file_pub_names(af):
+                if n != sym and camel_base(n) == base:
+                    fam.add(n)
+
+    see, seen = [], set()
+    for *_, docs in hits:
+        for d in docs:
+            for ident in BACKTICK_RE.findall(d):
+                if ident != sym and ident not in seen:
+                    seen.add(ident); see.append(ident)
+
+    eff, effseen = [], set()
+    def add_eff(s):
+        if s not in effseen:
+            effseen.add(s); eff.append(s)
+    for n in sorted(fam):
+        if "AssumeCapacity" in n: add_eff(f"{n} — skips the capacity/alloc check (faster, you guarantee room)")
+        elif "Unmanaged" in n:   add_eff(f"{n} — caller passes the allocator (no stored allocator)")
+        elif "Comptime" in n:    add_eff(f"{n} — comptime-evaluated variant")
+    for *_, docs in hits:                 # keep only actionable steers, not doc echoes
+        for d in docs:
+            low = d.lower()
+            if "instead" in low or "asserts" in low:
+                add_eff(d.lstrip("/ ").strip())
+    return sorted(fam), see, eff[:6]
+
+def zig_version():
+    try:
+        out = subprocess.check_output(["zig", "env"], text=True)
+        m = re.search(r'\.version\s*=\s*"([^"]+)"', out)
+        return m.group(1) if m else "?"
+    except Exception:
+        return "?"
+
+REPHRASE_MODEL = "qwen2.5-coder:3b"
+REPHRASE_PROMPT = (
+    "Convert a programming intent into GENERIC mechanism keywords describing the "
+    "underlying operation, to search a standard library's docs. Do NOT name any "
+    "language or function. Use plain technical terms only.\n"
+    "Example: 'read a line from stdin' => read bytes from input stream until newline delimiter\n"
+    "Example: 'make a string uppercase' => convert ascii letters to upper case\n"
+    "Example: 'grow a dynamic array' => increase list capacity, append elements, reallocate buffer\n"
+    "Intent: '{}' =>")
+
+def rephrase(query):
+    """Use a local reasoning model to translate use-case -> mechanism vocabulary."""
+    import urllib.request
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/generate",
+            data=json.dumps({"model": REPHRASE_MODEL, "prompt": REPHRASE_PROMPT.format(query),
+                "stream": False, "options": {"temperature": 0.0, "num_predict": 40}}).encode(),
+            headers={"Content-Type": "application/json"})
+        out = json.load(urllib.request.urlopen(req))["response"].strip()
+        return out.split("\n")[0].strip().strip('"').strip() or None
+    except Exception:
+        return None
+
+def cmd_find(argv):
+    """Layer B: semantic search over the zig_api index (needs ollama + postgres)."""
+    k = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 8
+    raw = "--raw" in argv
+    # query = everything except 'find', flags, and flag values
+    terms, j = [], 0
+    while j < len(argv):
+        t = argv[j]
+        if t == "find":
+            j += 1
+        elif t == "--limit":
+            j += 2
+        elif t.startswith("-"):
+            j += 1
+        else:
+            terms.append(t); j += 1
+    if not terms:
+        print('usage: zfact find "natural language description" [--limit N]'); return 1
+    import urllib.request
+    try:
+        import psycopg
+    except ImportError:
+        print("Layer B needs psycopg (pip install psycopg)"); return 1
+    query = " ".join(terms)
+    ver = zig_version()
+    rq = None if raw else rephrase(query)      # reasoning in front of similarity
+    search_text = rq or query
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/embed",
+            data=json.dumps({"model": "nomic-embed-text", "input": search_text}).encode(),
+            headers={"Content-Type": "application/json"})
+        emb = json.load(urllib.request.urlopen(req))["embeddings"][0]
+    except Exception as e:
+        print(f"embedding failed — is ollama running? (`ollama serve`): {e}"); return 1
+    qv = "[" + ",".join(f"{v:.6f}" for v in emb) + "]"
+    dsn = os.getenv("LLMLAB_DSN", "postgresql:///llmlab?host=/tmp")
+    try:
+        with psycopg.connect(dsn) as c:
+            have = [r[0] for r in c.execute("SELECT DISTINCT zig_version FROM zig_api").fetchall()]
+            if not have:
+                print("index empty — run: zfact-index"); return 1
+            if ver not in have:
+                print(f"! no index for installed zig {ver} (have {have}). "
+                      f"Index is STALE — rerun: zfact-index"); return 1
+            rows = c.execute(
+                "SELECT symbol,namespace,kind,signature,doc,1-(embedding<=>%s::vector) "
+                "FROM zig_api WHERE zig_version=%s ORDER BY embedding<=>%s::vector LIMIT %s",
+                (qv, ver, qv, k)).fetchall()
+    except Exception as e:
+        print(f"db query failed: {e}"); return 1
+    if not rows:
+        print("no matches"); return 1
+    print(f'# find "{query}"  (semantic search, zig {ver}, top {len(rows)})')
+    if rq and rq != query:
+        print(f'  rephrased → "{rq}"')
+    print()
+    for sym, ns, kind, sig, doc, sim in rows:
+        loc = f"{ns}.{sym}" if ns else sym
+        print(f"  [{sim:.2f}] {loc}  ({kind})")
+        print(f"         {sig}")
+        if doc:
+            print(f"         ⌁ {doc[:110]}")
+        print()
+    return 0
+
+def main(argv):
+    args = [a for a in argv if not a.startswith("-")]
+    sig_only = "--sig" in argv or "-s" in argv
+    if args and args[0] == "find":
+        return cmd_find(argv)
+    if not args:
+        print(__doc__); return 1
+    query = args[0]
+    parts = query.split(".")
+    sym = parts[-1]
+    ns = parts[:-1]
+    std = std_dir()
+
+    scoped_files = candidate_files(std, ns) if ns else set()
+    everything = all_zig(std)
+
+    def find(fileset):
+        h = search(fileset, sym, std, DECL(sym))
+        if h:
+            return h, False
+        h = search(fileset, sym, std, DECL_FUZZY(sym))   # substring-in-name
+        return h, bool(h)
+
+    hits, fuzzy = find(scoped_files or everything)
+    widened = False
+    if not hits and scoped_files:      # namespace guess may be stale — widen std-wide
+        hits, fuzzy = find(everything)
+        widened = bool(hits)
+
+    # rank: files whose path mentions a namespace part first, then by path
+    def score(h):
+        rel = h[0].lower()
+        return (-sum(p.lower() in rel for p in ns), rel, h[1])
+    hits.sort(key=score)
+
+    if not hits:
+        where = "scoped to " + ", ".join(sorted(set(ns))) if ns else "std-wide"
+        print(f"no `pub` decl named '{sym}' found ({where}) in {std}")
+        return 1
+
+    notes = []
+    if widened:
+        notes.append(f"NOT in namespace '{'.'.join(ns)}' — found std-wide (your namespace may be stale)")
+    if fuzzy:
+        notes.append("fuzzy: declared name contains the query")
+    tag = ("  [" + "; ".join(notes) + "]") if notes else ""
+    print(f"# {query}  —  {len(hits)} match(es) in {std}{tag}\n")
+    for rel, ln, sig, docs in hits:
+        for d in docs:
+            print(f"  {d}")
+        print(f"  {sig}")
+        print(f"      └─ {rel}:{ln}")
+        res = resolve_reexport(sig, os.path.join(std, rel), std)
+        if res:
+            kind, (r2, l2, s2, d2) = res
+            print(f"      → {kind}:")
+            for d in d2:
+                print(f"          {d}")
+            print(f"          {s2}")
+            print(f"            └─ {r2}:{l2}")
+        print()
+
+    if not sig_only:
+        fam, see, eff = neighborhood(std, hits, sym)
+        if fam or see or eff:
+            print("  ── neighborhood ──")
+        if fam:
+            shown = fam[:16]
+            more = f"  (+{len(fam) - 16} more)" if len(fam) > 16 else ""
+            print("  ◆ family:   " + " · ".join(shown) + more)
+        if see:
+            print("  ◆ see also: " + " · ".join(f"`{s}`" for s in see[:12]))
+        if eff:
+            print("  ◆ notes:")
+            for e in eff:
+                print(f"      - {e}")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

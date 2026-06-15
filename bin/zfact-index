@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""
+zfact-index — build the Layer B semantic index over the Zig std API.
+
+Extracts every `pub fn/const/var` from the installed std, embeds
+(namespace + signature + doc) with ollama nomic-embed-text, and upserts into the
+`zig_api` postgres table, STAMPED with the current Zig version.
+
+This is a DERIVED cache. The installed std stays the source of truth. Re-run after
+any Zig upgrade. `zfact find` warns if the index version != the installed version.
+
+  zfact-index                 (re)build the index (documented decls) for current Zig
+  zfact-index --all           include undocumented decls too (~4x larger, slower)
+  zfact-index --limit 300     index only the first N decls (smoke test)
+  zfact-index --module crypto only files whose path contains 'crypto'
+
+By default only decls WITH a /// doc comment are indexed: ~24% of std, far higher
+semantic signal for concept search (an undocumented name embeds poorly anyway).
+"""
+import sys, os, re, json, time, subprocess, glob, urllib.request
+import psycopg
+
+DSN   = os.getenv("LLMLAB_DSN", "postgresql:///llmlab?host=/tmp")
+OLLAMA = "http://localhost:11434/api/embed"
+MODEL = "nomic-embed-text"
+PUB   = re.compile(r'^\s*pub\s+(fn|const|var)\s+([A-Za-z_]\w*)')
+
+def zig_env():
+    out = subprocess.check_output(["zig", "env"], text=True)
+    std = re.search(r'\.std_dir\s*=\s*"([^"]+)"', out).group(1)
+    ver = re.search(r'\.version\s*=\s*"([^"]+)"', out).group(1)
+    return std, ver
+
+def signature(lines, i):
+    """Collect a decl's signature from line i until '{' (fn body) or ';'."""
+    buf = []
+    for j in range(i, min(i + 8, len(lines))):
+        s = lines[j].strip()
+        buf.append(s)
+        if "{" in s or s.endswith(";"):
+            break
+    sig = " ".join(buf)
+    return sig.split("{")[0].strip().rstrip("{").strip()
+
+def doc_above(lines, i):
+    docs, j = [], i - 1
+    while j >= 0 and lines[j].lstrip().startswith("///"):
+        docs.insert(0, lines[j].lstrip()[3:].strip()); j -= 1
+    return " ".join(docs)
+
+def extract(std, module=None, include_all=False):
+    out = []
+    for f in glob.glob(os.path.join(std, "**", "*.zig"), recursive=True):
+        rel = os.path.relpath(f, std)
+        if module and module not in rel:
+            continue
+        try:
+            lines = open(f, errors="replace").read().splitlines()
+        except OSError:
+            continue
+        ns = os.path.dirname(rel).replace("/", ".")
+        for i, line in enumerate(lines):
+            m = PUB.match(line)
+            if m:
+                doc = doc_above(lines, i)
+                if not doc and not include_all:
+                    continue
+                kind, sym = m.group(1), m.group(2)
+                out.append({
+                    "symbol": sym, "namespace": ns, "kind": kind,
+                    "signature": signature(lines, i), "doc": doc,
+                    "file": rel, "line": i + 1,
+                })
+    return out
+
+def embed(texts):
+    req = urllib.request.Request(OLLAMA,
+        data=json.dumps({"model": MODEL, "input": texts}).encode(),
+        headers={"Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req))["embeddings"]
+
+def vec(e):
+    return "[" + ",".join(f"{v:.6f}" for v in e) + "]"
+
+def main(argv):
+    limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
+    module = argv[argv.index("--module") + 1] if "--module" in argv else None
+    include_all = "--all" in argv
+    std, ver = zig_env()
+    print(f"zig {ver}  std={std}" + ("  [--all]" if include_all else "  [documented only]"))
+
+    decls = extract(std, module, include_all)
+    if limit:
+        decls = decls[:limit]
+    print(f"extracted {len(decls)} decls" + (f" (module={module})" if module else ""))
+    if not decls:
+        return 1
+
+    with psycopg.connect(DSN) as c:
+        c.execute("DELETE FROM zig_api WHERE zig_version = %s"
+                  + (" AND file LIKE %s" if module else ""),
+                  (ver, f"%{module}%") if module else (ver,))
+        BATCH, t0, done = 64, time.time(), 0
+        for k in range(0, len(decls), BATCH):
+            chunk = decls[k:k + BATCH]
+            texts = [f"{d['namespace']}.{d['symbol']} ({d['kind']})\n"
+                     f"{d['signature']}\n{d['doc']}" for d in chunk]
+            embs = embed(texts)
+            with c.cursor() as cur:
+                cur.executemany(
+                    """INSERT INTO zig_api
+                       (zig_version,symbol,namespace,kind,signature,doc,file,line,embedding)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (zig_version,file,line) DO UPDATE SET
+                         symbol=EXCLUDED.symbol, signature=EXCLUDED.signature,
+                         doc=EXCLUDED.doc, embedding=EXCLUDED.embedding""",
+                    [(ver, d["symbol"], d["namespace"], d["kind"], d["signature"],
+                      d["doc"], d["file"], d["line"], vec(e))
+                     for d, e in zip(chunk, embs)])
+            c.commit()
+            done += len(chunk)
+            rate = done / (time.time() - t0)
+            print(f"\r  embedded {done}/{len(decls)}  ({rate:.0f}/s)", end="", flush=True)
+        print(f"\ndone: {done} decls indexed for zig {ver}")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
