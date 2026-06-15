@@ -15,7 +15,8 @@ Management:
 import sys, os, json, subprocess
 
 HERE     = os.path.dirname(os.path.abspath(__file__))
-ZSNAG    = os.path.join(HERE, "zsnag")
+ROOT     = os.path.dirname(HERE)
+ZSNAG    = os.path.join(ROOT, "zig-out", "bin", "zsnag")   # the compiled Zig checker
 SELF     = os.path.join(HERE, "zhook")
 FLAG     = os.path.expanduser("~/.config/zforge/hook.disabled")
 SETTINGS = os.environ.get("ZFORGE_SETTINGS", os.path.expanduser("~/.claude/settings.json"))
@@ -82,12 +83,14 @@ def run_hook():
         return 0
 
     findings = []
-    try:
-        r = subprocess.run([sys.executable, ZSNAG, fp], capture_output=True, text=True, timeout=20)
-        if r.stdout.strip() and "clean" not in r.stdout:
-            findings.append(r.stdout.strip())
-    except Exception:
-        pass
+    if os.path.exists(ZSNAG):           # the compiled Zig checker; prints to stderr, silent when clean
+        try:
+            r = subprocess.run([ZSNAG, fp], capture_output=True, text=True, timeout=20)
+            out = (r.stdout + r.stderr).strip()
+            if out:
+                findings.append(out)
+        except Exception:
+            pass
     try:
         r = subprocess.run(["zig", "ast-check", fp], capture_output=True, text=True, timeout=20)
         if r.returncode != 0 and r.stderr.strip():

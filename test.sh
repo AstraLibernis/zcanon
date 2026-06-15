@@ -55,17 +55,19 @@ else
   echo "SKIP: Layer B semantic test (ollama down or index empty)"
 fi
 
-# --- zsnag (LLM footgun checker) ---
-bad="$(./bin/zsnag test_fixtures/bad.zig 2>&1)"
+# --- zsnag (LLM footgun checker, compiled Zig) ---
+zig build >/dev/null 2>&1 || { echo "FAIL: zig build"; fail=1; }
+ZS=./zig-out/bin/zsnag
+bad="$($ZS test_fixtures/bad.zig 2>&1)"
 for r in R001 R002 R003 R004 R005 R006 R007 R008 R009 R010; do
   if grep -q "$r" <<<"$bad"; then echo "PASS: zsnag catches $r"; else echo "FAIL: zsnag missed $r"; fail=1; fi
 done
-./bin/zsnag test_fixtures/bad.zig >/dev/null 2>&1
+$ZS test_fixtures/bad.zig >/dev/null 2>&1
 [ $? -ne 0 ] && echo "PASS: zsnag exits non-zero on errors" || { echo "FAIL: zsnag should exit non-zero"; fail=1; }
-clean="$(./bin/zsnag test_fixtures/good.zig 2>&1)"
-if grep -q "clean" <<<"$clean"; then echo "PASS: zsnag clean on good file (no false positives)"; else echo "FAIL: zsnag false-positived on good.zig"; echo "$clean"; fail=1; fi
+clean="$($ZS test_fixtures/good.zig 2>&1)"
+if [ -z "$clean" ]; then echo "PASS: zsnag clean on good file (no false positives)"; else echo "FAIL: zsnag false-positived on good.zig"; echo "$clean"; fail=1; fi
 # real-code false-positive regression: method-named async/await + FixedBufferAllocator
-fp="$(./bin/zsnag test_fixtures/fp_regression.zig 2>&1)"
+fp="$($ZS test_fixtures/fp_regression.zig 2>&1)"
 if grep -qE "R001|R008" <<<"$fp"; then echo "FAIL: zsnag false-positive regressed"; echo "$fp"; fail=1; else echo "PASS: zsnag no FP on real-code patterns (method async/await, FixedBufferAllocator)"; fi
 
 [ "$fail" = 0 ] && echo "--- all passed ---" || echo "--- failures present ---"
