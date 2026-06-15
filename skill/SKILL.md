@@ -9,15 +9,16 @@ description: >-
 # Writing Zig with zforge
 
 Your memory of Zig's standard library is probably out of date — Zig changes fast.
-Do not trust it. Verify against the installed std using the zforge tools. The tools
-live in the zforge checkout's `bin/` (put it on PATH, or use the full path).
+Do not trust it. Verify against the installed std using the zforge tools. Build them
+once with `zig build` (produces `zig-out/bin/zfact` and `zig-out/bin/zsnag`); the
+Nushell tools run with `nu nu/<name>.nu`.
 
 ## Before you write a std API call
 
 1. If you are unsure of the **name**, find it by concept:
-   `zfact find "read a line until newline"`
+   `nu nu/zfind.nu "read a line until newline"`
 2. Confirm the **exact current signature** and see the alternatives:
-   `zfact Io.Reader.streamDelimiter`
+   `zig-out/bin/zfact Io.Reader.streamDelimiter`
    The output also lists the symbol's family and any "use X instead" notes — prefer the
    most efficient variant (e.g. `appendAssumeCapacity` after `ensureTotalCapacity`),
    not just the first one that compiles.
@@ -32,7 +33,7 @@ The `zhook` PostToolUse hook (if installed) runs automatically and reports:
 - `zsnag` — known LLM footguns
 
 Read its findings and fix them before moving on. If the hook is not installed, run
-`zsnag <file>` yourself.
+`zig-out/bin/zsnag <file>` yourself.
 
 ## Mistakes to avoid (zsnag checks these)
 

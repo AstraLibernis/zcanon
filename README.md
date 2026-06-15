@@ -19,16 +19,19 @@ truth, never the model's memory.
 
 ## The pieces
 
-| Tool | Job | Needs |
-|------|-----|-------|
-| `bin/zfact` | Look up the **current** signature of a std symbol + its neighborhood (variants, cross-refs, efficiency notes) | nothing (reads local std) |
-| `bin/zfact find` | Find an API **by concept** when you don't know the name (semantic search, with query rephrasing) | ollama + postgres index |
-| `bin/zsnag` | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
-| `bin/zhook` | Run `zsnag` + `zig ast-check` automatically when a `.zig` file is edited, and feed findings back to the model | Claude Code |
-| `bin/zfact-index` | Build the semantic search index (`sql/schema_zig_api.sql`) | ollama + postgres |
-| `skill/SKILL.md` | The instruction that makes the model actually *reach for* these every session | Claude Code |
+The tools that read and judge Zig source are written **in Zig** (the project dogfoods
+itself); the glue that talks to ollama and postgres is written **in Nushell**. No Python.
 
-The first three need no dependencies and are always-current. `find` and the index add an
+| Tool | Lang | Job | Needs |
+|------|------|-----|-------|
+| `zig-out/bin/zfact` | Zig | Look up the **current** signature of a std symbol + its neighborhood (variants, cross-refs, efficiency notes) | nothing (reads local std) |
+| `zig-out/bin/zsnag` | Zig | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
+| `nu/zfind.nu` | Nushell | Find an API **by concept** when you don't know the name (semantic search, with query rephrasing) | ollama + postgres index |
+| `nu/zindex.nu` | Nushell | Build the semantic search index (`sql/schema_zig_api.sql`) via `zfact --dump` | ollama + postgres |
+| `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` automatically when a `.zig` file is edited, and feed findings back to the model | Claude Code |
+| `skill/SKILL.md` | — | The instruction that makes the model actually *reach for* these every session | Claude Code |
+
+The two Zig binaries need no dependencies and are always-current. `zfind`/`zindex` add an
 optional semantic layer (local ollama embeddings + postgres/pgvector).
 
 ## Install
@@ -36,22 +39,23 @@ optional semantic layer (local ollama embeddings + postgres/pgvector).
 ```sh
 git clone https://codeberg.org/AstraLibernis/zforge.git
 cd zforge
+zig build                              # builds zig-out/bin/{zfact,zsnag}
 
 # 1. always-on tools work immediately:
-bin/zfact Io.Reader.stream
-bin/zsnag yourfile.zig
+zig-out/bin/zfact Io.Reader.stream
+zig-out/bin/zsnag yourfile.zig
 
 # 2. the auto-checker hook (reversible — see below):
-bin/zhook --install        # adds a PostToolUse hook to ~/.claude/settings.json (backs up first)
+nu nu/zhook.nu --install   # adds a PostToolUse hook to ~/.claude/settings.json (backs up first)
 
 # 3. the optional semantic search layer:
-psql ... -f sql/schema_zig_api.sql   # one-time table
-bin/zfact-index                       # build the index (needs `ollama serve`)
-bin/zfact find "hash a password"
+psql ... -f sql/schema_zig_api.sql     # one-time table
+nu nu/zindex.nu                        # build the index (needs `ollama serve`)
+nu nu/zfind.nu "hash a password"
 ```
 
-The hook is fully reversible: `zhook --disable` / `--enable` toggle it with no settings
-change; `zhook --uninstall` removes only our entry and leaves the rest of your settings
+The hook is fully reversible: `nu nu/zhook.nu --disable` / `--enable` toggle it with no
+settings change; `--uninstall` removes only our entry and leaves the rest of your settings
 intact.
 
 ## What it does and does not do
@@ -64,7 +68,7 @@ intact.
 
 ## Status
 
-Tools built and tested (`./test.sh` — 27 checks). Validated on real third-party Zig
+Tools built and tested (`nu nu/test.nu` — 26 checks). Validated on real third-party Zig
 (zls, zig-clap, http.zig). The keystone that turns the tools into a true "install once,
 better Zig everywhere" pack — the skill in `skill/SKILL.md` — and the longer roadmap are
 in `PLAN.md`.
@@ -72,12 +76,13 @@ in `PLAN.md`.
 ## Layout
 
 ```
-bin/      the tools (zfact, zsnag, zhook, zfact-index)
+src/      the Zig tools (zfact.zig, zsnag.zig) + build.zig
+nu/       the Nushell glue (zfind, zindex, zhook, test, lib)
 sql/      the semantic-index table schema
 skill/    SKILL.md — the instruction that wires the tools into how the model writes Zig
-test/     (test.sh at root) + test_fixtures/  — smoke + false-positive regression tests
+test_fixtures/  smoke + false-positive regression fixtures
 docs/     component notes
 PLAN.md   how the pieces tie together + roadmap
 ```
 
-Verified against Zig 0.16.0, 2026-06-15.
+Verified against Zig 0.16.0 / Nushell 0.99.1, 2026-06-15.

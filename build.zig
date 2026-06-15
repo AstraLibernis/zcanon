@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Analysis tools that read/judge Zig source — written in Zig (dogfood).
-    const tools = [_][]const u8{"zsnag"};
+    const tools = [_][]const u8{ "zsnag", "zfact" };
     inline for (tools) |name| {
         const exe = b.addExecutable(.{
             .name = name,

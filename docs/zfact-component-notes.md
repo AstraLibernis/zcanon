@@ -29,15 +29,16 @@ and "what's the best call for this?":
 
 Pass `--sig` (or `-s`) to print signatures only and suppress the cluster (hook mode).
 
-## Layer B — semantic search (`zfact find`)
+## Layer B — semantic search (`zfind`, Nushell)
 
 Layers A above are zero-dependency and exact. Layer B adds the one thing structure
-cannot: finding an API **by concept when you don't know its name**.
+cannot: finding an API **by concept when you don't know its name**. It is a Nushell
+tool (`nu/zfind.nu`) because it is ollama + postgres glue, not Zig-source analysis.
 
 ```
-zfact find "authenticated encryption with associated data"   # -> ChaCha20Poly1305, ...
-zfact find "hash a password securely"                        # -> pwhash, strHashWithSalt
-zfact find "read until a delimiter" --limit 5
+nu nu/zfind.nu "authenticated encryption with associated data"   # -> ChaCha20Poly1305, ...
+nu nu/zfind.nu "hash a password securely"                        # -> pwhash, strHashWithSalt
+nu nu/zfind.nu "read until a delimiter" --limit 5
 ```
 
 It embeds the query with ollama `nomic-embed-text` and cosine-ranks it against an
@@ -47,15 +48,17 @@ built; the pure-lookup commands do not.
 ### Building the index
 
 ```
-zfact-index            # documented decls only (~24% of std, higher signal); ~17 min CPU
-zfact-index --all      # include undocumented decls too (~4x larger, slower)
 psql ... -f schema_zig_api.sql   # one-time: create the table
+nu nu/zindex.nu            # documented decls only (~24% of std, higher signal)
+nu nu/zindex.nu --all      # include undocumented decls too (~4x larger, slower)
 ```
 
-The index is a **derived, version-stamped cache** in the `zig_api` table — the
-installed std remains the source of truth. `zfact find` refuses to answer (and tells
-you to rebuild) if the index version != the installed Zig version, so it can never
-silently serve stale results. Re-run `zfact-index` after any Zig upgrade.
+`zindex` gets its declarations from the Zig binary (`zfact --dump`), then embeds and
+upserts them — extraction stays in Zig, glue stays in Nushell. The index is a
+**derived, version-stamped cache** in the `zig_api` table — the installed std remains
+the source of truth. `zfind` refuses to answer (and tells you to rebuild) if the index
+version != the installed Zig version, so it can never silently serve stale results.
+Re-run `nu nu/zindex.nu` after any Zig upgrade.
 
 ### The vocabulary gap, and the rephrase bridge
 
@@ -69,7 +72,7 @@ model (`qwen2.5-coder:3b`) translates use-case wording into mechanism keywords, 
 the embedding search runs. Reasoning in front of similarity:
 
 ```
-find "read a line of text from stdin"
+nu nu/zfind.nu "read a line of text from stdin"
   rephrased → "read characters from input stream until newline delimiter"
   → Io.streamDelimiter, streamDelimiterLimit, discardDelimiterExclusive   ✓
 ```
@@ -79,7 +82,7 @@ caller that phrased it well) — saves the ~3s model call.
 
 Honest scope: ranking is still approximate (it ranks the *neighborhood*, not a
 guaranteed #1), and the rephrase adds a local-model dependency + latency. The reliable
-backbone remains the exact lookup — **`find` to discover a name → `zfact <symbol>` for
+backbone remains the exact lookup — **`zfind` to discover a name → `zfact <symbol>` for
 the truth.**
 
 ## Usage
@@ -114,8 +117,9 @@ identically-named symbols semantically; relies on `pub` declarations being grep-
 
 ## Testing
 
-`./test.sh` runs a smoke battery against the installed std. Expected signature
-substrings are version-specific and must be updated when Zig's std changes.
+`nu nu/test.nu` runs the smoke battery (26 checks) against the installed std — it builds
+the Zig tools, exercises zfact/zsnag, and (if ollama + the index are up) zfind. Expected
+signature substrings are version-specific and must be updated when Zig's std changes.
 
 ## zsnag — the LLM footgun checker
 
@@ -140,15 +144,16 @@ The 10 rules, by confidence:
 
 Exit code is non-zero if any `error`-severity finding is present (so it can gate CI/a hook).
 
-Honest limits: detection is text-based — it ignores strings and `//` comments but does not
-fully parse Zig. R006 and R008 are heuristics (they look at nearby lines / the whole file),
-so they favor precision over completeness: R006 only flags the one-line `if (n==0) break;`
-form; R008 only fires for an allowlist of types that actually have a `deinit`
-(ArrayList, HashMap, ArenaAllocator, …) plus `openFile`/`createFile`→`close`. R001 ignores
-`.async(`/`.await(` method calls (those names are valid identifiers now). R004 (`catch
-unreachable`) and R007 (casual casts) are correct but high-volume — they are "review these"
-flags, not "these are bugs." The precise version would use Zig's real parse tree
-(`std.zig.Ast`) — a later upgrade.
+Honest limits: `zsnag` is written in Zig and runs the **real Zig tokenizer**, so strings,
+comments, and identifier boundaries are handled structurally (not by regex) — e.g. a
+method named `.async()` is correctly *not* flagged, because R001 checks the token before
+it. It is not yet a full parser. R006 and R008 are heuristics (they look at nearby tokens
+/ the whole token stream), so they favor precision over completeness: R006 only flags the
+one-line `if (n==0) break;` form; R008 only fires for an allowlist of types that actually
+have a `deinit` (ArrayList, HashMap, ArenaAllocator, …) plus `openFile`/`createFile`→
+`close`. R004 (`catch unreachable`) and R007 (casual casts) are correct but high-volume —
+they are "review these" flags, not "these are bugs." The precise version would use Zig's
+real parse tree (`std.zig.Ast`) on top of the tokens — a later upgrade.
 
 Validated on real third-party code (zls, zig-clap, http.zig, ~6.5k lines): the first pass
 surfaced two false-positive classes (method-named `async`/`await`; `init()` of types with no
@@ -159,9 +164,12 @@ surfaced two false-positive classes (method-named `async`/`await`; `init()` of t
 - **zsnag — LLM footgun checker (10 rules):** done, tested (no false positives on the good fixture).
 - **Phase 1 — L2 lookup engine:** done, tested.
 - **Layer A — neighborhood cluster** (family / see-also / efficiency notes): done, tested.
-- **Layer B — semantic search** (`zfact find`, embeddings + pgvector): done. Derived,
-  version-stamped, rebuildable index (`zfact-index`); live std stays the source of truth.
-- **Phase 2 — Claude Code hook** (`PostToolUse` on `.zig` edits → `ast-check` →
-  auto-`zfact` on API errors): not built; will be **disable-able** by design.
+- **Layer B — semantic search** (`zfind`, embeddings + pgvector): done. Derived,
+  version-stamped, rebuildable index (`zindex`); live std stays the source of truth.
+- **Phase 2 — Claude Code hook** (`zhook`, `PostToolUse` on `.zig` edits → `zsnag` +
+  `ast-check`, findings injected back): done, reversible, installed.
+- **Refactor to Zig + Nushell** (Python eliminated): done. `zfact`/`zsnag` are Zig;
+  `zfind`/`zindex`/`zhook`/`test` are Nushell.
 
-Verified against: Zig 0.16.0, std at `/usr/lib/zig/std`, 2026-06-15. `./test.sh` = 11 cases.
+Verified against: Zig 0.16.0 / Nushell 0.99.1, std at `/usr/lib/zig/std`, 2026-06-15.
+`nu nu/test.nu` = 26 checks.

@@ -15,7 +15,7 @@ right facts and checks in front of it at the right time.
                          ┌─────────────── the model writes/edits Zig ───────────────┐
                          │                                                            │
    BEFORE writing        │   the SKILL tells the model to:                            │
-   ──────────────        │     • zfact find "<concept>"   → discover the current name │
+   ──────────────        │     • zfind "<concept>"        → discover the current name │
                          │     • zfact <Symbol>           → exact signature + variants │
                          │                                                            │
    AFTER an edit         │   the HOOK fires automatically:                            │
@@ -49,17 +49,21 @@ Install paths for the skill (pick one):
 ## Roadmap
 
 **Done**
-- `zfact` — current-API lookup + neighborhood cluster (variants, cross-refs, efficiency)
-- `zfact find` — semantic search with use-case→mechanism query rephrasing
-- `zsnag` — 10 verified LLM-mistake rules; validated on real third-party code
-- `zhook` — automatic, reversible PostToolUse checker
-- `skill/SKILL.md` — the behavioral instruction (this commit)
+- `zfact` (Zig) — current-API lookup + neighborhood cluster (variants, cross-refs, efficiency)
+- `zsnag` (Zig) — 10 verified LLM-mistake rules, tokenizer-based; validated on real third-party code
+- `zfind` (Nushell) — semantic search with use-case→mechanism query rephrasing
+- `zindex` (Nushell) — index builder, fed by `zfact --dump`
+- `zhook` (Nushell) — automatic, reversible PostToolUse checker
+- `skill/SKILL.md` — the behavioral instruction
+- **Refactor to Zig + Nushell, Python eliminated** — Zig-source analysis is in Zig (it
+  dogfoods the project); ollama/postgres glue is in Nushell.
 
 **Next (in rough order of value)**
 1. **Harden the skill** — tune the wording so the model reliably uses the tools without
    over-calling them. Measure by dogfooding on real Zig tasks.
-2. **Precise `zsnag` (AST version)** — rewrite the checker in Zig using `std.zig.Ast` (the
-   real parse tree) to cut the remaining text-matching false positives. Dogfoods Zig.
+2. **Precise `zsnag` (full-AST version)** — `zsnag` already uses the real Zig tokenizer;
+   upgrade the heuristic rules (R006/R008) to `std.zig.Ast` (the parse tree) to cut the
+   last text-pattern false positives.
 3. **Generate→test→mine loop** — generate Zig with a model, compile/test it, and let the
    compiler/tests label the failures. The most common failures become new `zsnag` rules
    or `zfact` entries. This data-drives the rule set instead of hand-curation, and it is
