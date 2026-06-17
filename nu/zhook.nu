@@ -87,17 +87,26 @@ def line-at [lines: list, ln: int] {
 }
 
 def log-book [fp: string, ver: string, findings: list, ast_errs: list, src: list] {
-    let rows = ($findings | each {|f|
-        let snip = (line-at $src $f.line)
-        "(" + ([(sql-str $ver) (sql-str $fp) (sql-str $f.rule) (sql-str $f.severity) ($f.line | into string) ($f.col | into string) (sql-str $f.message) (sql-str $snip)] | str join ",") + ")"
+    # Build one record per finding, then dedup WITHIN this batch on the same key
+    # the DB dedups on — two identical lines in one file would otherwise collide
+    # in a single ON CONFLICT statement.
+    let frecs = ($findings | each {|f|
+        { ver: $ver, file: $fp, rule: $f.rule, severity: $f.severity, line: ($f.line | into int), col: ($f.col | into int), message: $f.message, snippet: (line-at $src $f.line) }
     })
-    let arows = ($ast_errs | each {|e|
-        let snip = (line-at $src ($e.line | into int))
-        "(" + ([(sql-str $ver) (sql-str $fp) "'ast-check'" "'error'" $e.line $e.col (sql-str $e.message) (sql-str $snip)] | str join ",") + ")"
+    let arecs = ($ast_errs | each {|e|
+        { ver: $ver, file: $fp, rule: "ast-check", severity: "error", line: ($e.line | into int), col: ($e.col | into int), message: $e.message, snippet: (line-at $src ($e.line | into int)) }
     })
-    let all = ($rows | append $arows)
-    if ($all | is-empty) { return }
-    psql-exec ("INSERT INTO zig_log (zig_version,file,rule,severity,line,col,message,snippet) VALUES " + ($all | str join ","))
+    let recs = ($frecs | append $arecs | uniq-by file rule message snippet)
+    if ($recs | is-empty) { return }
+    let values = ($recs | each {|r|
+        "(" + ([(sql-str $r.ver) (sql-str $r.file) (sql-str $r.rule) (sql-str $r.severity) ($r.line | into string) ($r.col | into string) (sql-str $r.message) (sql-str $r.snippet)] | str join ",") + ")"
+    })
+    # Upsert: a recurring finding bumps hits + last_ts instead of adding a row.
+    psql-exec ("INSERT INTO zig_log (zig_version,file,rule,severity,line,col,message,snippet) VALUES "
+        + ($values | str join ",")
+        + " ON CONFLICT (file, rule, coalesce(message,''), coalesce(snippet,'')) DO UPDATE SET"
+        + " hits = zig_log.hits + 1, last_ts = now(), line = EXCLUDED.line, col = EXCLUDED.col,"
+        + " severity = EXCLUDED.severity, zig_version = EXCLUDED.zig_version")
 }
 
 # ---- the hook itself -----------------------------------------------------

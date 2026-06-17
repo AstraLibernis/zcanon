@@ -6,6 +6,9 @@
 //!   zsnag file.zig [more.zig ...]    check files
 //!   zsnag --json file.zig           one JSON object per finding (JSONL)
 //! Exit code is non-zero if any 'error'-severity finding is present.
+//!
+//! zsnag:allow R010 — this tool prints its findings via std.debug.print by
+//! design, so R010 (debug.print left in code) is a false positive on itself.
 const std = @import("std");
 const Token = std.zig.Token;
 const Tokenizer = std.zig.Tokenizer;
@@ -27,6 +30,31 @@ const NEEDS_DEINIT = [_][]const u8{
 
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+
+/// Collect rule codes named in `zsnag:allow R0NN ...` comments anywhere in the
+/// source. A file that deliberately trips a rule (e.g. a C port whose int model
+/// needs many `@intCast`) can silence it file-wide with one comment. `buf` caps
+/// how many codes we track; returns the slice actually filled (slices into src).
+fn collectAllow(src: [:0]const u8, buf: [][]const u8) []const []const u8 {
+    const marker = "zsnag:allow";
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i + marker.len <= src.len and n < buf.len) : (i += 1) {
+        if (!eq(src[i .. i + marker.len], marker)) continue;
+        var j = i + marker.len;
+        while (j < src.len and src[j] != '\n' and n < buf.len) : (j += 1) {
+            if (src[j] == 'R' and j + 4 <= src.len and
+                std.ascii.isDigit(src[j + 1]) and std.ascii.isDigit(src[j + 2]) and std.ascii.isDigit(src[j + 3]))
+            {
+                buf[n] = src[j .. j + 4];
+                n += 1;
+                j += 3;
+            }
+        }
+        i = j;
+    }
+    return buf[0..n];
 }
 
 fn lex(gpa: std.mem.Allocator, src: [:0]const u8) ![]Tk {
@@ -53,13 +81,16 @@ const State = struct {
     src: [:0]const u8,
     json: bool,
     any_err: *bool,
+    allow: []const []const u8 = &.{},
 
     fn text(s: State, t: Tk) []const u8 {
         return s.src[t.start..t.end];
     }
 
     fn emit(s: State, off: usize, rule: []const u8, sev: Sev, msg: []const u8) void {
-        if (sev == .err) s.any_err.* = true;
+        // file-level suppression: `zsnag:allow R0NN` anywhere in the file.
+        for (s.allow) |r| if (eq(r, rule)) return;
+
         var line: usize = 1;
         var col: usize = 1;
         var k: usize = 0;
@@ -69,6 +100,15 @@ const State = struct {
                 col = 1;
             } else col += 1;
         }
+
+        // inline suppression: `zsnag:ok` anywhere on the finding's source line.
+        var ls = off;
+        while (ls > 0 and s.src[ls - 1] != '\n') : (ls -= 1) {}
+        var le = off;
+        while (le < s.src.len and s.src[le] != '\n') : (le += 1) {}
+        if (std.mem.indexOf(u8, s.src[ls..le], "zsnag:ok") != null) return;
+
+        if (sev == .err) s.any_err.* = true;
         if (s.json) {
             std.debug.print(
                 "{{\"file\":\"{s}\",\"line\":{d},\"col\":{d},\"rule\":\"{s}\",\"severity\":\"{s}\",\"message\":\"{s}\"}}\n",
@@ -120,8 +160,14 @@ fn scan(gpa: std.mem.Allocator, st: State) !void {
             },
             .builtin => {
                 const w = st.text(tok);
-                if (eq(w, "@intCast") or eq(w, "@ptrCast") or eq(w, "@alignCast"))
-                    st.emit(tok.start, "R007", .info, "this cast can panic/corrupt if out of range; verify first.");
+                if (eq(w, "@intCast") or eq(w, "@ptrCast") or eq(w, "@alignCast")) {
+                    // Don't flag a cast used directly as an index — `x[@intCast(..)]`
+                    // is already bounds-checked by the element access itself, so the
+                    // warning is redundant there. (Index casts dominate in ported C.)
+                    const is_index = prev != null and prev.?.tag == .l_bracket;
+                    if (!is_index)
+                        st.emit(tok.start, "R007", .info, "this cast can panic/corrupt if out of range; verify first.");
+                }
             },
             else => {},
         }
@@ -237,7 +283,9 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("cannot read {s}: {s}\n", .{ a, @errorName(e) });
             continue;
         };
-        try scan(gpa, .{ .path = a, .src = src, .json = json, .any_err = &any_err });
+        var allow_buf: [32][]const u8 = undefined;
+        const allow = collectAllow(src, &allow_buf);
+        try scan(gpa, .{ .path = a, .src = src, .json = json, .any_err = &any_err, .allow = allow });
     }
     if (nfiles == 0) std.debug.print("usage: zsnag [--json] file.zig ...\n", .{});
     if (any_err) std.process.exit(1);
