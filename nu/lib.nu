@@ -71,3 +71,32 @@ export def psql-exec [sql: string] {
 export def psql-json [sql: string] {
     psql-query $"SELECT coalesce\(json_agg\(row_to_json\(t)),'[]'::json) FROM \(($sql)) t" | from json
 }
+
+# ---- the book (sqlite) ---------------------------------------------------
+# The mistake log is single-user local state: ONE sqlite file, no server needed.
+# (The semantic index above stays on postgres+pgvector — it needs vector search.)
+# Book path: $ZFORGE_BOOK, else ~/.config/zforge/book.db.
+export def book-db [] {
+    $env.ZFORGE_BOOK? | default ($env.HOME | path join .config zforge book.db)
+}
+
+# Apply the schema idempotently so the book auto-creates on first use — no setup.
+export def ensure-book [] {
+    let db = (book-db)
+    mkdir ($db | path dirname)
+    let schema = ($env.FILE_PWD | path dirname | path join sql schema_zig_log.sql)
+    open --raw $schema | ^sqlite3 $db
+}
+
+# Execute SQL against the book (DDL/DML). Ensures the book exists first.
+export def book-exec [sql: string] {
+    ensure-book
+    $sql | ^sqlite3 (book-db)
+}
+
+# Run a SELECT against the book, return parsed records (sqlite3 -json; [] if empty).
+export def book-query [sql: string] {
+    ensure-book
+    let out = (^sqlite3 -json (book-db) $sql)
+    if ($out | str trim | is-empty) { [] } else { $out | from json }
+}

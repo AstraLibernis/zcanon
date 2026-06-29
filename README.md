@@ -28,16 +28,18 @@ itself); the glue that talks to ollama and postgres is written **in Nushell**.
 | `zig-out/bin/zsnag` | Zig | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
 | `nu/zfind.nu` | Nushell | Find an API **by concept** when you don't know the name (semantic search, with query rephrasing) | ollama + postgres index |
 | `nu/zindex.nu` | Nushell | Build the semantic search index (`sql/schema_zig_api.sql`) via `zfact --dump` | ollama + postgres |
-| `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` on every `.zig` edit, feed findings back to the model, **and log them to the book** | Claude Code (+ postgres for the book) |
-| `nu/zbook.nu` | Nushell | Read **the book** — the corpus of real mistakes the hook captured live, ranked by frequency | postgres |
+| `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` on every `.zig` edit, feed findings back to the model, **and log them to the book** | Claude Code (+ sqlite for the book) |
+| `nu/zbook.nu` | Nushell | Read **the book** — the corpus of real mistakes the hook captured live, ranked by frequency | sqlite (one local file) |
 | `skill/SKILL.md` | — | The instruction that makes the model actually *reach for* these every session | Claude Code |
 
-The two Zig binaries need no dependencies and are always-current. The rest use a local
-**library** (postgres) holding two books: the std-API index (`zig_api`, built by
-`zindex`, searched by `zfind`) and the live mistake log (`zig_log`, written by `zhook`,
-read by `zbook`). The mistake log is the honest version of "learn the model's blind
-spots": it records what the model *actually* gets wrong on real edits, judged by the
-compiler — no synthetic generation, no guessing.
+The two Zig binaries need no dependencies and are always-current. The semantic search
+layer uses **postgres+pgvector** (the `zig_api` index, built by `zindex`, searched by
+`zfind`) — it needs vector search. The **book** (`zig_log`, written by `zhook`, read by
+`zbook`) is single-user local state, so it lives in **one sqlite file**
+(`~/.config/zforge/book.db`, override `$ZFORGE_BOOK`) — no server, and the hook
+auto-creates it on first write. The mistake log is the honest version of "learn the
+model's blind spots": it records what the model *actually* gets wrong on real edits,
+judged by the compiler — no synthetic generation, no guessing.
 
 ## Install
 
@@ -59,7 +61,7 @@ nu nu/zindex.nu                        # build the index (needs `ollama serve`)
 nu nu/zfind.nu "hash a password"
 
 # 4. the book — log real mistakes the hook catches, then read them back:
-psql ... -f sql/schema_zig_log.sql     # one-time table; the hook fills it as you work
+#    (no setup: the hook auto-creates ~/.config/zforge/book.db on first .zig edit)
 nu nu/zbook.nu                         # table of contents, ranked by frequency
 ```
 
@@ -94,4 +96,5 @@ docs/     component notes
 PLAN.md   how the pieces tie together + roadmap
 ```
 
-Verified against Zig 0.16.0 / Nushell 0.99.1, 2026-06-15.
+Verified against Zig 0.16.0 / Nushell 0.113.1, 2026-06-29 (book on sqlite; the
+semantic index still uses postgres+pgvector).

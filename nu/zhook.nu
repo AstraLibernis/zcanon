@@ -19,8 +19,8 @@ def here   [] { $env.FILE_PWD }
 def root   [] { $env.FILE_PWD | path dirname }
 def zsnag  [] { root | path join zig-out bin zsnag }
 def self   [] { here | path join zhook.nu }
-def flag   [] { $nu.home-path | path join .config zforge hook.disabled }
-def settings-path [] { $env.ZFORGE_SETTINGS? | default ($nu.home-path | path join .claude settings.json) }
+def flag   [] { $nu.home-dir | path join .config zforge hook.disabled }
+def settings-path [] { $env.ZFORGE_SETTINGS? | default ($nu.home-dir | path join .claude settings.json) }
 
 # ---- management ----------------------------------------------------------
 def do-disable [] {
@@ -79,8 +79,8 @@ def do-uninstall [] {
     print $"Removed our hook from ($sp). Other settings untouched."
 }
 
-# ---- writing the book (postgres) -----------------------------------------
-def sql-str [s: string] { "'" + ($s | str replace --all "'" "''") + "'" }
+# ---- writing the book (sqlite) -------------------------------------------
+def sql-str [s] { "'" + ($s | into string | str replace --all "'" "''") + "'" }
 def line-at [lines: list, ln: int] {
     let i = ($ln - 1)
     if ($i >= 0) and ($i < ($lines | length)) { ($lines | get $i | str trim) } else { "" }
@@ -101,12 +101,14 @@ def log-book [fp: string, ver: string, findings: list, ast_errs: list, src: list
     let values = ($recs | each {|r|
         "(" + ([(sql-str $r.ver) (sql-str $r.file) (sql-str $r.rule) (sql-str $r.severity) ($r.line | into string) ($r.col | into string) (sql-str $r.message) (sql-str $r.snippet)] | str join ",") + ")"
     })
-    # Upsert: a recurring finding bumps hits + last_ts instead of adding a row.
-    psql-exec ("INSERT INTO zig_log (zig_version,file,rule,severity,line,col,message,snippet) VALUES "
+    # Upsert into the sqlite book: a recurring finding bumps hits + last_ts instead
+    # of adding a row. message/snippet are NOT NULL DEFAULT '' so the conflict target
+    # is a plain composite (no coalesce). book-exec auto-creates the book on first use.
+    book-exec ("INSERT INTO zig_log (zig_version,file,rule,severity,line,col,message,snippet) VALUES "
         + ($values | str join ",")
-        + " ON CONFLICT (file, rule, coalesce(message,''), coalesce(snippet,'')) DO UPDATE SET"
-        + " hits = zig_log.hits + 1, last_ts = now(), line = EXCLUDED.line, col = EXCLUDED.col,"
-        + " severity = EXCLUDED.severity, zig_version = EXCLUDED.zig_version")
+        + " ON CONFLICT (file, rule, message, snippet) DO UPDATE SET"
+        + " hits = hits + 1, last_ts = datetime('now'), line = excluded.line, col = excluded.col,"
+        + " severity = excluded.severity, zig_version = excluded.zig_version")
 }
 
 # ---- the hook itself -----------------------------------------------------
