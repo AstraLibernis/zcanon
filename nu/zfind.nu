@@ -2,7 +2,7 @@
 # zfind — Layer B semantic search over the Zig std API (the "find by concept" tool).
 #
 # Answers "what does X?" when you don't know the name. Embeds your query (after
-# rephrasing it into mechanism vocabulary) and ranks the zig_api index by cosine
+# rephrasing it into mechanism vocabulary) and ranks the zig_map index by cosine
 # similarity. Pipe a result name back into `zfact <symbol>` for the exact signature
 # + neighborhood cluster.
 #
@@ -10,8 +10,9 @@
 #   zfind "increase list capacity" --raw      skip rephrase (already mechanistic)
 #   zfind "read a line of text" --limit 4     cap results
 #
-# Needs ollama (embeddings + rephrase) and postgres/pgvector (the index built by
-# zindex). Refuses to serve a stale index (version != installed Zig).
+# Needs ollama (embeddings + rephrase) and postgres/pgvector (the zig_map index
+# built by zmap from zephem's complete, verified std datasets). Refuses to serve a
+# stale index (version != installed Zig).
 use lib.nu *
 
 def main [
@@ -28,21 +29,21 @@ def main [
     let ver = $ze.ver
 
     # index must exist and match the installed Zig (never serve stale truth)
-    let have = (psql-query "SELECT DISTINCT zig_version FROM zig_api" | lines | where {|x| not ($x | is-empty)})
+    let have = (psql-query "SELECT DISTINCT zig_version FROM zig_map" | lines | where {|x| not ($x | is-empty)})
     if ($have | is-empty) {
-        print "index empty — run: nu nu/zindex.nu"
+        print "index empty — run: nu nu/zmap.nu"
         return
     }
     if not ($ver in $have) {
-        print $"! no index for installed zig ($ver) \(have ($have)). Index is STALE — rerun: nu nu/zindex.nu"
+        print $"! no index for installed zig ($ver) \(have ($have)). Index is STALE — rerun zephem's build_std.nu, then: nu nu/zmap.nu"
         return
     }
 
     let search_text = if $raw { $query } else { (rephrase $query) }
     let qv = (vec (embed $search_text | get 0))
 
-    let sql = ("SELECT symbol,namespace,kind,signature,doc,round((1-(embedding<=>'" + $qv + "'::vector))::numeric,2) " +
-        "FROM zig_api WHERE zig_version='" + $ver + "' " +
+    let sql = ("SELECT symbol,namespace,kind,signature,doc,canon,round((1-(embedding<=>'" + $qv + "'::vector))::numeric,2) " +
+        "FROM zig_map WHERE zig_version='" + $ver + "' " +
         "ORDER BY embedding<=>'" + $qv + "'::vector LIMIT " + ($limit | into string))
     let rows = (psql-query $sql | lines | where {|x| not ($x | is-empty)})
     if ($rows | is-empty) {
@@ -62,10 +63,12 @@ def main [
         let kind = ($f | get 2)
         let sig = ($f | get 3)
         let doc = ($f | get 4)
-        let sim = ($f | get 5)
+        let canon = ($f | get 5)
+        let sim = ($f | get 6)
         let loc = (if ($ns | is-empty) { $sym } else { $"($ns).($sym)" })
         print $"  [($sim)] ($loc)  \(($kind))"
-        print $"         ($sig)"
+        if not ($sig | is-empty) { print $"         ($sig)" }
+        if not ($canon | is-empty) { print $"         → alias of ($canon) — prefer the canonical name" }
         if not ($doc | is-empty) {
             print $"         ⌁ ($doc | str substring 0..110)"
         }
