@@ -15,7 +15,7 @@ right facts and checks in front of it at the right time.
                          ┌─────────────── the model writes/edits Zig ───────────────┐
                          │                                                            │
    BEFORE writing        │   the SKILL tells the model to:                            │
-   ──────────────        │     • zfind "<concept>"        → discover the current name │
+   ──────────────        │     • zmap find <keywords>     → discover the current name │
                          │     • zfact <Symbol>           → exact signature + variants │
                          │                                                            │
    AFTER an edit         │   the HOOK fires automatically:                            │
@@ -51,8 +51,7 @@ Install paths for the skill (pick one):
 **Done**
 - `zfact` (Zig) — current-API lookup + neighborhood cluster (variants, cross-refs, efficiency)
 - `zsnag` (Zig) — 10 verified LLM-mistake rules, tokenizer-based; validated on real third-party code
-- `zfind` (Nushell) — semantic search with use-case→mechanism query rephrasing
-- `zindex` (Nushell) — index builder, fed by `zfact --dump`
+- `zmap` (Nushell) — deterministic reader over zephem's complete std map: keyword `find`, `show` a module, `doc` a path (replaced the removed embedding/pgvector search)
 - `zhook` (Nushell) — automatic, reversible PostToolUse checker; **logs every finding to the book**
 - `zbook` (Nushell) — reads the book (`zig_log`): real mistakes ranked by frequency
 - `skill/SKILL.md` — the behavioral instruction
@@ -78,7 +77,7 @@ APIs to surface in the skill, which `zsnag` rules earn their keep).
    upgrade the heuristic rules (R006/R008) to `std.zig.Ast` (the parse tree) to cut the
    last text-pattern false positives.
 4. **Bundle as one installable unit** — a single installer that wires tools + hook + skill
-   + index + book in one step, so "copy home, settle on Claude" is literally one command.
+   + book in one step, so "copy home, settle on Claude" is literally one command.
 
 **Stretch — give back to Zig**
 The book accumulates data on which mistakes are most common and where the compiler's error

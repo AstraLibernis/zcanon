@@ -29,61 +29,38 @@ and "what's the best call for this?":
 
 Pass `--sig` (or `-s`) to print signatures only and suppress the cluster (hook mode).
 
-## Layer B — semantic search (`zfind`, Nushell)
+## Layer B — reading the complete std map (`zmap`, Nushell)
 
-Layers A above are zero-dependency and exact. Layer B adds the one thing structure
-cannot: finding an API **by concept when you don't know its name**. It is a Nushell
-tool (`nu/zfind.nu`) because it is ollama + postgres glue, not Zig-source analysis.
-
-```
-nu nu/zfind.nu "authenticated encryption with associated data"   # -> ChaCha20Poly1305, ...
-nu nu/zfind.nu "hash a password securely"                        # -> pwhash, strHashWithSalt
-nu nu/zfind.nu "read until a delimiter" --limit 5
-```
-
-It embeds the query with ollama `nomic-embed-text` and cosine-ranks it against an
-index of std declarations (pgvector). This needs **ollama running** and the index
-built; the pure-lookup commands do not.
-
-### Building the index
+Layer A above is zero-dependency and exact, but answers only "I know the name." Layer B
+adds discovery — finding an API **by concept when you don't know its name** — by reading
+the **complete, verified std map** that [zephem](https://codeberg.org/AstraLibernis/zephem)
+extracts (every name, signature, and doc, as plain TSVs). It is a Nushell tool
+(`nu/zmap.nu`) because it reads files, not Zig source.
 
 ```
-psql ... -f schema_zig_api.sql   # one-time: create the table
-nu nu/zindex.nu            # documented decls only (~24% of std, higher signal)
-nu nu/zindex.nu --all      # include undocumented decls too (~4x larger, slower)
+nu nu/zmap.nu find aead associated      # keyword search (AND of terms) over the whole map
+nu nu/zmap.nu find "hash password"      # -> pwhash, strHash, ...
+nu nu/zmap.nu show std.crypto.pwhash    # browse a module/subtree
+nu nu/zmap.nu doc std.fmt.parseInt      # signature + doc for one path
 ```
 
-`zindex` gets its declarations from the Zig binary (`zfact --dump`), then embeds and
-upserts them — extraction stays in Zig, glue stays in Nushell. The index is a
-**derived, version-stamped cache** in the `zig_api` table — the installed std remains
-the source of truth. `zfind` refuses to answer (and tells you to rebuild) if the index
-version != the installed Zig version, so it can never silently serve stale results.
-Re-run `nu nu/zindex.nu` after any Zig upgrade.
+`find` is a **deterministic keyword search** over every name, path, signature, and doc
+in the map, ranked name-match-first. Because the map is complete and the match is
+literal, a hit is never missed and never mis-ranked — `find parse int` returns
+`fmt.parseInt` at the top. The LLM supplies the *meaning* by choosing the mechanism
+words ("delimiter", "alloc", "hash"); if a search comes up empty, it rethinks the
+wording and searches again.
 
-### The vocabulary gap, and the rephrase bridge
+This replaced an earlier embedding/vector search (ollama `nomic-embed-text` + pgvector).
+That was removed deliberately: when the consumer is a capable LLM, a small embedding
+model is a *worse* semantic layer than letting the LLM keyword-search the full map
+itself — it confused "parse an integer from a string" with `Uri.parse`; keyword search
+does not. The retired design is archived in `docs/archive/semantic-enrichment-guide.md`.
 
-std docs describe the *mechanism* ("read from the stream until `delimiter` is found"),
-not the *use case* ("a line from stdin"). A raw embedding search is therefore
-vocabulary-sensitive: "read bytes until a delimiter" hits the right `streamDelimiter`
-family, but "read a line from stdin" used to return formatting functions.
-
-`find` fixes this by **rephrasing the query before embedding** — a local reasoning
-model (`qwen2.5-coder:3b`) translates use-case wording into mechanism keywords, *then*
-the embedding search runs. Reasoning in front of similarity:
-
-```
-nu nu/zfind.nu "read a line of text from stdin"
-  rephrased → "read characters from input stream until newline delimiter"
-  → Io.streamDelimiter, streamDelimiterLimit, discardDelimiterExclusive   ✓
-```
-
-Pass `--raw` to skip the rephrase when your query is already mechanistic (e.g. an LLM
-caller that phrased it well) — saves the ~3s model call.
-
-Honest scope: ranking is still approximate (it ranks the *neighborhood*, not a
-guaranteed #1), and the rephrase adds a local-model dependency + latency. The reliable
-backbone remains the exact lookup — **`zfind` to discover a name → `zfact <symbol>` for
-the truth.**
+Honest scope: `find` matches *literal* substrings, so a true synonym with no shared word
+("make text loud" vs `toUpper`) won't hit — that is the LLM's job to rephrase and retry.
+The reliable flow stays **`zmap find` to discover a name → `zfact <symbol>` for the
+live, exact signature.**
 
 ## Usage
 
@@ -117,9 +94,9 @@ identically-named symbols semantically; relies on `pub` declarations being grep-
 
 ## Testing
 
-`nu nu/test.nu` runs the smoke battery (26 checks) against the installed std — it builds
-the Zig tools, exercises zfact/zsnag, and (if ollama + the index are up) zfind. Expected
-signature substrings are version-specific and must be updated when Zig's std changes.
+`nu nu/test.nu` runs the smoke battery against the installed std — it builds the Zig
+tools, exercises zfact/zsnag, and (if zephem's map is present) zmap. Expected signature
+substrings are version-specific and must be updated when Zig's std changes.
 
 ## zsnag — the LLM footgun checker
 
@@ -164,12 +141,12 @@ surfaced two false-positive classes (method-named `async`/`await`; `init()` of t
 - **zsnag — LLM footgun checker (10 rules):** done, tested (no false positives on the good fixture).
 - **Phase 1 — L2 lookup engine:** done, tested.
 - **Layer A — neighborhood cluster** (family / see-also / efficiency notes): done, tested.
-- **Layer B — semantic search** (`zfind`, embeddings + pgvector): done. Derived,
-  version-stamped, rebuildable index (`zindex`); live std stays the source of truth.
+- **Layer B — map reader** (`zmap`): done. Deterministic keyword `find` / `show` / `doc`
+  over zephem's complete, verified std map. Replaced the removed embedding/pgvector
+  search (archived in `docs/archive/`).
 - **Phase 2 — Claude Code hook** (`zhook`, `PostToolUse` on `.zig` edits → `zsnag` +
-  `ast-check`, findings injected back): done, reversible, installed.
+  `ast-check`, findings injected back + logged to the sqlite book): done, reversible, installed.
 - **Implementation:** `zfact`/`zsnag` are Zig (they read and judge Zig source);
-  `zfind`/`zindex`/`zhook`/`test` are Nushell (ollama + postgres + hook glue).
+  `zmap`/`zhook`/`zbook`/`test` are Nushell (map + sqlite glue — no server, no models).
 
-Verified against: Zig 0.16.0 / Nushell 0.99.1, std at `/usr/lib/zig/std`, 2026-06-15.
-`nu nu/test.nu` = 26 checks.
+Verified against: Zig 0.16.0 / Nushell 0.113.1, std at `/usr/local/zig/lib/std`, 2026-06-29.

@@ -1,3 +1,9 @@
+> **ARCHIVED 2026-06-29.** This documents the removed embedding/vector search
+> (`zfind`/`zindex`, ollama `nomic-embed-text` + postgres/pgvector). It was cut because,
+> with a capable LLM as the consumer, a small embedding model is a worse semantic layer
+> than deterministic keyword search over the complete std map — see `nu/zmap.nu` and
+> `docs/zfact-component-notes.md` (Layer B). Kept for the design reasoning only.
+
 # Guide: enriching the semantic index with gloss + tags
 
 **Goal.** Make `zfind` (concept → symbol search) more accurate by adding, to each

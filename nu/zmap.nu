@@ -1,118 +1,93 @@
 #!/usr/bin/env nu
-# zmap — build zforge's semantic index from ZEPHEM's verified TSV datasets.
+# zmap — read the complete, verified zephem std map. Deterministic: no AI, no DB.
+# Discovery + browsing over the 100%-mapped truth (this replaces the old semantic
+# search; keyword search over the full map has 100% literal recall and no false
+# ranking — "parse int" finds fmt.parseInt, which the embedding search missed).
 #
-# Where zindex.nu feeds the index from a live `zfact --dump` (partial, per-symbol),
-# zmap feeds it from zephem's data/std/*.tsv — the COMPLETE, self-verified std map
-# (16k decls, parse-based so poison decls survive), de-duplicated via canon, and
-# carrying richer provenance (alias target, parse/reflect witness). It joins
-# nodes+sigs+docs+canon+callcard into one record per decl, embeds with ollama, and
-# upserts into the `zig_map` table (sql/schema_zig_map.sql), stamped with the Zig
-# version zephem pinned. A DERIVED cache — regenerate zephem against the live
-# toolchain (build_std.nu) on any Zig upgrade, then re-run this.
+#   zmap find parse int            decls whose name/path/sig/doc contain ALL terms
+#   zmap find "constant time"      multi-word term (quote it)
+#   zmap show std.fmt              list one module/namespace subtree
+#   zmap doc std.fmt.parseInt      signature + doc for one exact path
 #
-#   nu nu/zmap.nu --dump --limit 20      transform only, print JSONL (NO db/ollama)
-#   nu nu/zmap.nu                         (re)build the index (decls with a sig or doc)
-#   nu nu/zmap.nu --all                   include bare decls too (every node)
-#   nu nu/zmap.nu --module crypto         only paths containing 'crypto'
-#   nu nu/zmap.nu --data /path/to/std     point at a different zephem data dir
+# Reads zephem's TSVs at $ZEPHEM_DATA (default ~/projects/zephem/data/std). For a
+# chosen name, confirm the CURRENT signature with `zfact <name>` (reads live std).
 use lib.nu *
 
-# Default zephem data dir: $ZEPHEM_DATA, else ~/projects/zephem/data/std.
-def zephem-dir [] {
-    $env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data std] | path join)
+def zephem-dir [] { $env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data std] | path join) }
+
+def load-map [] {
+    let d = (zephem-dir)
+    if not ($d | path join nodes.tsv | path exists) {
+        error make {msg: $"zephem map not found at ($d) — clone zephem + run `nu scripts/build_std.nu`, or set $ZEPHEM_DATA"}
+    }
+    let nodes = (open ($d | path join nodes.tsv))      # path depth kind name n_children detail
+    let sigs  = (open ($d | path join sigs.tsv))       # path sig
+    let docs  = (open ($d | path join docs.tsv))       # path doc
+    $nodes | join --left $sigs path | join --left $docs path
 }
 
-def build-records [ddir: string, all: bool, module: string] {
-    let nodes = (open ($ddir | path join nodes.tsv))
-    let sigs  = (open ($ddir | path join sigs.tsv))                       # path sig
-    let docs  = (open ($ddir | path join docs.tsv))                       # path doc
-    let canon = (try { open ($ddir | path join canon.tsv) | select path canon } catch { [] })
-    let cards = (try { open ($ddir | path join callcard.tsv) | select path witness } catch { [] })
-
-    # `file` is left empty in v1: it is non-essential here (the key is `path`, and
-    # the embedding text uses namespace/symbol/kind/sig/doc, not file). Populate it
-    # precisely once zephem emits per-decl source location (file+line) — its next
-    # parser step, which this index is exactly the consumer for.
-    mut rows = ($nodes | select path kind name
-        | join --left $sigs path
-        | join --left $docs path
-        | join --left $canon path
-        | join --left $cards path)
-    if ($module | is-not-empty) { $rows = ($rows | where path =~ $module) }
-    let recs = ($rows | each {|r| {
-        path:      $r.path
-        namespace: ($r.path | split row '.' | drop | str join '.')
-        symbol:    $r.name
-        kind:      $r.kind
-        sig:       ($r.sig?     | default '')
-        doc:       ($r.doc?     | default '')
-        file:      ''
-        canon:     ($r.canon?   | default '')
-        witness:   ($r.witness? | default '')
-    }})
-    if $all { $recs } else { $recs | where {|r| ($r.sig | is-not-empty) or ($r.doc | is-not-empty) } }
+# keyword search: every term must appear (case-insensitive) in path/name/sig/doc.
+# rank: all terms in the leaf NAME (0) > in the PATH (1) > only sig/doc (2);
+# shorter path breaks ties (the canonical decl over a deep re-export).
+def cmd-find [map: table, terms: list, limit: int] {
+    if ($terms | is-empty) { print "usage: zmap find <terms...>"; return }
+    let lc = ($terms | each {|t| $t | str downcase})
+    let hits = ($map | where {|r|
+        let hay = ([$r.path $r.name ($r.sig? | default '') ($r.doc? | default '')] | str join ' ' | str downcase)
+        $lc | all {|t| $hay | str contains $t}
+    })
+    let scored = ($hits
+        | insert _s {|r|
+            let nm = ($r.name | str downcase)
+            let pa = ($r.path | str downcase)
+            if ($lc | all {|t| $nm | str contains $t}) { 0
+            } else if ($lc | all {|t| $pa | str contains $t}) { 1
+            } else { 2 } }
+        | insert _pl {|r| $r.path | str length }
+        | sort-by _s _pl
+        | first $limit)
+    if ($scored | is-empty) { print $"no map entry matches: ($terms | str join ' ')"; return }
+    print $"# map find: ($terms | str join ' ')  \(top ($scored | length) of ($hits | length) hits)\n"
+    for r in $scored {
+        print $"  ($r.path)  \(($r.kind))"
+        let sig = ($r.sig? | default '')
+        let doc = ($r.doc? | default '')
+        if not ($sig | is-empty) { print $"      ($sig)" }
+        if not ($doc | is-empty) { print $"      ⌁ ($doc | str substring 0..120)" }
+    }
 }
 
-def main [
-    --data: string     # zephem data dir (default: ~/projects/zephem/data/std)
-    --all              # include decls with neither signature nor doc
-    --module: string   # only paths containing this substring
-    --limit: int       # cap the number of decls (smoke test)
-    --dump             # print the records as JSONL and exit (no ollama/postgres)
-] {
-    let ddir = ($data | default (zephem-dir))
-    if not ($ddir | path join nodes.tsv | path exists) {
-        print -e $"zephem data not found at ($ddir) — clone zephem and run `nu scripts/build_std.nu`"
-        return
-    }
-    # PINNED reads e.g. "zig 0.16.0"; normalise to the bare version ("0.16.0") so it
-    # matches the zig_version that zindex.nu writes (from `zig env`).
-    let pinned = ($ddir | path join PINNED)
-    let ver = (if ($pinned | path exists) {
-        open $pinned | str trim | split row ' ' | last
-    } else { (zig-env).ver })
+def cmd-show [map: table, pathprefix: string] {
+    if ($pathprefix | is-empty) { print "usage: zmap show <path>"; return }
+    let sub = ($map | where {|r| ($r.path == $pathprefix) or ($r.path | str starts-with $"($pathprefix).")} | sort-by path)
+    if ($sub | is-empty) { print $"nothing under ($pathprefix)"; return }
+    print $"# map show ($pathprefix)  \(($sub | length) decls)\n"
+    $sub | select path kind | table
+}
 
-    mut recs = (build-records $ddir $all ($module | default ''))
-    if ($limit | is-not-empty) { $recs = ($recs | first $limit) }
-    let modnote = (if ($module | is-not-empty) { $" \(module=($module))" } else { "" })
-    print -e $"zig ($ver)  zephem=($ddir)  decls=($recs | length)($modnote)"
-    if ($recs | is-empty) { return }
+def cmd-doc [map: table, path: string] {
+    if ($path | is-empty) { print "usage: zmap doc <path>"; return }
+    let row = ($map | where path == $path)
+    if ($row | is-empty) { print $"($path) not in the map"; return }
+    let r = ($row | first)
+    print $"($r.path)  \(($r.kind))"
+    let sig = ($r.sig? | default '')
+    let doc = ($r.doc? | default '')
+    if not ($sig | is-empty) { print $"  ($sig)" }
+    if not ($doc | is-empty) { print $"\n  ($doc)" }
+    print "\n(snapshot from the map — confirm the CURRENT signature with: zfact <name>)"
+}
 
-    if $dump {
-        $recs | each {|r| $r | to json --raw } | str join (char nl) | print
-        return
+def main [cmd?: string, ...args: string, --limit (-l): int = 12] {
+    match $cmd {
+        "find" => (cmd-find (load-map) $args $limit)
+        "show" => (cmd-show (load-map) ($args | get 0? | default ""))
+        "doc"  => (cmd-doc  (load-map) ($args | get 0? | default ""))
+        _ => {
+            print "zmap — read the complete zephem std map (deterministic, no AI/DB)"
+            print "  zmap find <terms...>   keyword search over the whole map (path/name/sig/doc)"
+            print "  zmap show <path>       list a module/namespace subtree"
+            print "  zmap doc  <path>       signature + doc for one exact path"
+        }
     }
-
-    # clear this version's rows (scoped to module if given), then embed + upsert
-    if ($module | is-not-empty) {
-        psql-exec $"DELETE FROM zig_map WHERE zig_version='($ver)' AND path LIKE '%($module)%'"
-    } else {
-        psql-exec $"DELETE FROM zig_map WHERE zig_version='($ver)'"
-    }
-
-    # `into string` first: Nushell auto-types TSV cells, so a numeric-looking doc or
-    # signature can arrive as int/float — coerce before quoting.
-    def sql-str [s] { "'" + ($s | into string | str replace --all "'" "''") + "'" }
-    let total = ($recs | length)
-    mut done = 0
-    for batch in ($recs | chunks 64) {
-        let texts = ($batch | each {|d| $"($d.namespace).($d.symbol) \(($d.kind))\n($d.sig)\n($d.doc)" })
-        let embs = (embed $texts)
-        let values = ($batch | enumerate | each {|it|
-            let d = $it.item
-            let v = (vec ($embs | get $it.index))
-            "(" + ([
-                (sql-str $ver) (sql-str $d.path) (sql-str $d.namespace) (sql-str $d.symbol)
-                (sql-str $d.kind) (sql-str $d.sig) (sql-str $d.doc) (sql-str $d.file)
-                (sql-str $d.canon) (sql-str $d.witness) ((sql-str $v) + "::vector")
-            ] | str join ",") + ")"
-        } | str join ",")
-        let sql = ("INSERT INTO zig_map (zig_version,path,namespace,symbol,kind,signature,doc,file,canon,witness,embedding) VALUES " +
-            $values +
-            " ON CONFLICT (zig_version,path) DO UPDATE SET symbol=EXCLUDED.symbol, kind=EXCLUDED.kind, signature=EXCLUDED.signature, doc=EXCLUDED.doc, file=EXCLUDED.file, canon=EXCLUDED.canon, witness=EXCLUDED.witness, embedding=EXCLUDED.embedding")
-        psql-exec $sql
-        $done = ($done + ($batch | length))
-        print -n $"\r  embedded ($done)/($total)"
-    }
-    print $"\ndone: ($done) decls indexed for zig ($ver) into zig_map"
 }

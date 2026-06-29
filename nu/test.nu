@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # test.nu — zforge smoke battery. Asserts current std via the compiled Zig tools
-# (zfact, zsnag) plus the Nushell semantic layer (zfind). Run against installed Zig.
+# (zfact, zsnag) plus the zephem map reader (zmap). Run against installed Zig.
 #   nu nu/test.nu
 use lib.nu *
 
@@ -49,30 +49,26 @@ if ((out-of $ZF ["ArrayList.append" "--sig"]) | str contains "◆ family:") {
     print "PASS: --sig suppresses cluster"
 }
 
-# --- Layer B semantic (zfind.nu): only if ollama up AND index populated ---
-let ollama_up = (try { http get http://localhost:11434/api/tags | ignore; true } catch { false })
-let index_rows = (try { (psql-query "SELECT count(*) FROM zig_api" | str trim | into int) } catch { 0 })
-if $ollama_up and ($index_rows > 0) {
-    let zfind = ($root | path join nu zfind.nu)
-    let pw = (^nu $zfind "hash a password securely" --raw --limit 5 | complete | get stdout)
-    if ($pw =~ "(?i)pwhash|strHash|password") {
-        print "PASS: semantic find (password hashing)"
+# --- zmap reader (deterministic keyword search over the zephem map) ---
+# Only if the zephem map is present (the reader's only dependency, no server).
+let zmap = ($root | path join nu zmap.nu)
+let zdata = ($env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data std] | path join))
+if ($zdata | path join nodes.tsv | path exists) {
+    # the case the old embedding search failed: "parse int" must surface fmt.parseInt
+    let pi = (^nu $zmap find parse int --limit 5 | complete | get stdout)
+    if ($pi | str contains "std.fmt.parseInt") {
+        print "PASS: zmap find surfaces fmt.parseInt (top hits)"
     } else {
-        print "FAIL: semantic find returned no password-hash API"; $fail = 1
+        print "FAIL: zmap find did not surface fmt.parseInt"; $fail = 1
     }
-    let has_qwen = (try { (http get http://localhost:11434/api/tags | get models.name | str join " ") | str contains "qwen2.5-coder" } catch { false })
-    if $has_qwen {
-        let rd = (^nu $zfind "read a line of text from stdin" --limit 4 | complete | get stdout)
-        if ($rd =~ "(?i)delimiter|stream") {
-            print "PASS: rephrase bridges use-case -> mechanism"
-        } else {
-            print "FAIL: rephrase did not surface delimiter/stream"; $fail = 1
-        }
+    let ct = (^nu $zmap find "constant time" --limit 3 | complete | get stdout)
+    if ($ct | str contains "timing_safe") {
+        print "PASS: zmap find surfaces timing_safe (constant time)"
     } else {
-        print "SKIP: rephrase test (qwen2.5-coder not pulled)"
+        print "FAIL: zmap find did not surface timing_safe"; $fail = 1
     }
 } else {
-    print "SKIP: Layer B semantic test (ollama down or index empty)"
+    print $"SKIP: zmap reader test \(zephem map not at ($zdata))"
 }
 
 # --- zsnag (LLM footgun checker, compiled Zig) ---

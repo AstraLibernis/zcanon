@@ -19,22 +19,28 @@ directory:
 
 ## Before you write a std API call
 
-1. **Don't know the name?** Find it by concept (semantic search over the *complete*,
-   verified std index):
+1. **Don't know the name?** Search the **complete, verified std map** by keyword. This
+   is deterministic — every literal match across all names/signatures/docs is returned,
+   ranked name-first (no fuzzy model, no missed answers):
    ```sh
-   nu ~/projects/zforge/nu/zfind.nu "read a line until a newline"
-   nu ~/projects/zforge/nu/zfind.nu "grow a dynamic array" --raw   # --raw if your phrasing is already mechanical
+   nu ~/projects/zforge/nu/zmap.nu find parse int        # AND of all terms
+   nu ~/projects/zforge/nu/zmap.nu find "constant time"  # quote a multi-word term
+   nu ~/projects/zforge/nu/zmap.nu show std.fmt          # browse a whole module/subtree
    ```
-   It returns ranked std paths with signatures + docs, and flags aliases ("→ alias of
-   X — prefer the canonical name").
+   **YOU are the semantic layer.** Pick the mechanism words you'd expect to see in std's
+   own names/docs ("delimiter", "alloc", "parse", "hash"), search, and if nothing lands,
+   rethink the wording and search again. Use `show <module>` when you know the
+   neighborhood but not the exact name.
 
 2. **Know the name? Confirm the exact CURRENT signature** and see the neighborhood:
    ```sh
    ~/projects/zforge/zig-out/bin/zfact Io.Reader.streamDelimiter
    ```
-   The output lists the symbol's family and any "use X instead" notes — prefer the most
-   efficient variant (e.g. `appendAssumeCapacity` after `ensureTotalCapacity`), not just
-   the first thing that compiles.
+   `zfact` reads the **live installed std** (the map is a pinned snapshot — always
+   confirm the signature with `zfact` before you write it). Its output lists the
+   symbol's family and any "use X instead" notes — prefer the most efficient variant
+   (e.g. `appendAssumeCapacity` after `ensureTotalCapacity`), not just the first thing
+   that compiles.
 
 ## After you edit a .zig file
 

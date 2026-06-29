@@ -20,26 +20,29 @@ truth, never the model's memory.
 ## The pieces
 
 The tools that read and judge Zig source are written **in Zig** (the project dogfoods
-itself); the glue that talks to ollama and postgres is written **in Nushell**.
+itself); the glue — reading the map and keeping the log — is written **in Nushell**.
+No database server, no embedding models: the two Zig binaries read live std, and the
+Nushell tools read plain files (zephem's std map + one sqlite log).
 
 | Tool | Lang | Job | Needs |
 |------|------|-----|-------|
 | `zig-out/bin/zfact` | Zig | Look up the **current** signature of a std symbol + its neighborhood (variants, cross-refs, efficiency notes) | nothing (reads local std) |
 | `zig-out/bin/zsnag` | Zig | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
-| `nu/zfind.nu` | Nushell | Find an API **by concept** when you don't know the name (semantic search, with query rephrasing) | ollama + postgres index |
-| `nu/zindex.nu` | Nushell | Build the semantic search index (`sql/schema_zig_api.sql`) via `zfact --dump` | ollama + postgres |
+| `nu/zmap.nu` | Nushell | **Read the complete std map** — keyword `find`, `show` a module, `doc` a path. Deterministic discovery over the 100%-mapped truth | zephem's std map (TSVs) |
 | `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` on every `.zig` edit, feed findings back to the model, **and log them to the book** | Claude Code (+ sqlite for the book) |
 | `nu/zbook.nu` | Nushell | Read **the book** — the corpus of real mistakes the hook captured live, ranked by frequency | sqlite (one local file) |
 | `skill/SKILL.md` | — | The instruction that makes the model actually *reach for* these every session | Claude Code |
 
-The two Zig binaries need no dependencies and are always-current. The semantic search
-layer uses **postgres+pgvector** (the `zig_api` index, built by `zindex`, searched by
-`zfind`) — it needs vector search. The **book** (`zig_log`, written by `zhook`, read by
-`zbook`) is single-user local state, so it lives in **one sqlite file**
-(`~/.config/zforge/book.db`, override `$ZFORGE_BOOK`) — no server, and the hook
-auto-creates it on first write. The mistake log is the honest version of "learn the
-model's blind spots": it records what the model *actually* gets wrong on real edits,
-judged by the compiler — no synthetic generation, no guessing.
+Discovery ("what's it called?") is **deterministic keyword search over the complete,
+verified std map** that [zephem](https://codeberg.org/AstraLibernis/zephem) extracts —
+not a fuzzy semantic search. The map has every name, signature, and doc, so a keyword
+hit is never missed and never mis-ranked; the LLM supplies the meaning by choosing the
+mechanism words. (The old embedding/vector search — postgres+pgvector+ollama — was
+removed: a weak embedding model is worse than letting a capable LLM search the full
+map.) The **book** (`zig_log`, written by `zhook`, read by `zbook`) is single-user
+local state in **one sqlite file** (`~/.config/zforge/book.db`, override
+`$ZFORGE_BOOK`) — no server, auto-created on first write. It records what the model
+*actually* gets wrong on real edits, judged by the compiler — no synthetic generation.
 
 ## Install
 
@@ -55,10 +58,9 @@ zig-out/bin/zsnag yourfile.zig
 # 2. the auto-checker hook (reversible — see below):
 nu nu/zhook.nu --install   # adds a PostToolUse hook to ~/.claude/settings.json (backs up first)
 
-# 3. the optional semantic search layer:
-psql ... -f sql/schema_zig_api.sql     # one-time table
-nu nu/zindex.nu                        # build the index (needs `ollama serve`)
-nu nu/zfind.nu "hash a password"
+# 3. read the complete std map (needs zephem's TSVs; set $ZEPHEM_DATA if not default):
+nu nu/zmap.nu find hash password       # keyword search the whole map
+nu nu/zmap.nu show std.crypto.pwhash   # browse a module
 
 # 4. the book — log real mistakes the hook catches, then read them back:
 #    (no setup: the hook auto-creates ~/.config/zforge/book.db on first .zig edit)
@@ -79,7 +81,7 @@ intact.
 
 ## Status
 
-Tools built and tested (`nu nu/test.nu` — 26 checks). Validated on real third-party Zig
+Tools built and tested (`nu nu/test.nu`). Validated on real third-party Zig
 (zls, zig-clap, http.zig). The keystone that turns the tools into a true "install once,
 better Zig everywhere" pack — the skill in `skill/SKILL.md` — and the longer roadmap are
 in `PLAN.md`.
@@ -88,13 +90,13 @@ in `PLAN.md`.
 
 ```
 src/      the Zig tools (zfact.zig, zsnag.zig) + build.zig
-nu/       the Nushell glue (zfind, zindex, zhook, zbook, test, lib)
-sql/      the library schemas (zig_api index, zig_log book)
+nu/       the Nushell glue (zmap, zhook, zbook, test, lib)
+sql/      schema_zig_log.sql — the sqlite book
 skill/    SKILL.md — the instruction that wires the tools into how the model writes Zig
 test_fixtures/  smoke + false-positive regression fixtures
 docs/     component notes
 PLAN.md   how the pieces tie together + roadmap
 ```
 
-Verified against Zig 0.16.0 / Nushell 0.113.1, 2026-06-29 (book on sqlite; the
-semantic index still uses postgres+pgvector).
+Verified against Zig 0.16.0 / Nushell 0.113.1, 2026-06-29. No database server and no
+embedding models: discovery reads zephem's std map, the book is one sqlite file.
