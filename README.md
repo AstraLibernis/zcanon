@@ -28,7 +28,8 @@ Nushell tools read plain files (zephem's std map + one sqlite log).
 |------|------|-----|-------|
 | `zig-out/bin/zfact` | Zig | Look up the **current** signature of a std symbol + its neighborhood (variants, cross-refs, efficiency notes) | nothing (reads local std) |
 | `zig-out/bin/zsnag` | Zig | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
-| `nu/zmap.nu` | Nushell | **Read the complete std map** — keyword `find`, `show` a module, `doc` a path. Deterministic discovery over the 100%-mapped truth | zephem's std map (TSVs) |
+| `zig-out/bin/zlook` | Zig | **Fast keyword discovery** over the whole map in one shot — SIMD (AVX2) search across name·path·signature·doc·**resolved type/error-set**·alias, ranked, structured output | a lookup table (`nu/build_lookup.nu`) |
+| `nu/zmap.nu` | Nushell | Read the complete std map — `find`, `show` a module, `doc` a path. Same map as `zlook`, via Nushell (no lookup table needed) | zephem's std map (TSVs) |
 | `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` on every `.zig` edit, feed findings back to the model, **and log them to the book** | Claude Code (+ sqlite for the book) |
 | `nu/zbook.nu` | Nushell | Read **the book** — the corpus of real mistakes the hook captured live, ranked by frequency | sqlite (one local file) |
 | `skill/SKILL.md` | — | The instruction that makes the model actually *reach for* these every session | Claude Code |
@@ -49,11 +50,16 @@ local state in **one sqlite file** (`~/.config/zforge/book.db`, override
 ```sh
 git clone https://codeberg.org/AstraLibernis/zforge.git
 cd zforge
-zig build                              # builds zig-out/bin/{zfact,zsnag}
+zig build                              # builds zig-out/bin/{zfact,zsnag,zlook}
 
 # 1. always-on tools work immediately:
 zig-out/bin/zfact Io.Reader.stream
 zig-out/bin/zsnag yourfile.zig
+
+# (optional) fast structured discovery — build the lookup table once, then search:
+nu nu/build_lookup.nu                  # joins zephem's TSVs -> ~/.config/zforge/lookup.tsv
+zig-out/bin/zlook parse int            # ranked hits: signature + resolved type + doc
+zig-out/bin/zlook OutOfMemory          # find fns by RESOLVED error set, not just name
 
 # 2. the auto-checker hook (reversible — see below):
 nu nu/zhook.nu --install   # adds a PostToolUse hook to ~/.claude/settings.json (backs up first)

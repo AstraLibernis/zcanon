@@ -21,10 +21,14 @@ directory:
 
 1. **Don't know the name?** Search the **complete, verified std map** by keyword. This
    is deterministic — every literal match across all names/signatures/docs is returned,
-   ranked name-first (no fuzzy model, no missed answers):
+   ranked name-first (no fuzzy model, no missed answers). Prefer `zlook` (SIMD-fast, one
+   shot, also searches the **resolved type/error-set** — e.g. find every fn that returns
+   `OutOfMemory`); it needs a one-time `nu ~/projects/zforge/nu/build_lookup.nu`. `zmap`
+   is the Nushell equivalent that reads zephem's TSVs directly (no lookup table):
    ```sh
-   nu ~/projects/zforge/nu/zmap.nu find parse int        # AND of all terms
-   nu ~/projects/zforge/nu/zmap.nu find "constant time"  # quote a multi-word term
+   ~/projects/zforge/zig-out/bin/zlook parse int         # AND of all terms, structured hits
+   ~/projects/zforge/zig-out/bin/zlook OutOfMemory       # find fns by resolved error set
+   nu ~/projects/zforge/nu/zmap.nu find "constant time"  # zmap: quote a multi-word term
    nu ~/projects/zforge/nu/zmap.nu show std.fmt          # browse a whole module/subtree
    ```
    **YOU are the semantic layer.** Pick the mechanism words you'd expect to see in std's
