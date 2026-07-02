@@ -15,15 +15,25 @@
 #
 # Reads zephem's source TSVs at $ZEPHEM_DATA (default ~/projects/zephem/data/std);
 # writes the lookup table zforge owns at $ZFORGE_LOOKUP (default ~/.config/zforge/lookup.tsv).
+use lib.nu *
 
 def zephem-dir [] { $env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data std] | path join) }
 def lookup-path [] { $env.ZFORGE_LOOKUP? | default ([$env.HOME ".config" zforge lookup.tsv] | path join) }
 
-def main [--out: string] {
+def main [--out: string, --force] {
     let d = (zephem-dir)
     for f in [nodes.tsv sigs.tsv docs.tsv resolved.tsv canon.tsv] {
         if not ($d | path join $f | path exists) {
             error make {msg: $"zephem dataset ($f) not found at ($d) — clone zephem + run `nu scripts/build_std.nu`, or set $ZEPHEM_DATA"}
+        }
+    }
+    # A baked lookup.tsv is read later by zlook WITHOUT zephem present, so a stale one
+    # can't be caught at read time — refuse to build it if the map's pinned zig differs
+    # from the installed zig. --force overrides (e.g. deliberately snapshotting an old map).
+    let stale = (zephem-staleness $d)
+    if not ($stale | is-empty) {
+        if $force { print -e $stale } else {
+            error make {msg: $"($stale)\nrefusing to build a possibly-stale lookup.tsv — pass --force to override."}
         }
     }
     let out = ($out | default (lookup-path))

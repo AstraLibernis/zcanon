@@ -40,3 +40,28 @@ export def book-query [sql: string] {
     let out = (^sqlite3 -json (book-db) $sql)
     if ($out | str trim | is-empty) { [] } else { $out | from json }
 }
+
+# ---- zephem map freshness -------------------------------------------------
+# The map is derived from ONE std snapshot; zephem stamps that version in
+# data/std/PINNED (e.g. "zig 0.16.0"). Staleness therefore reduces to a version
+# compare — no hashing or mtimes. Return the pinned version ("0.16.0"), or null
+# if the stamp is missing/absent.
+export def zephem-pinned [dir: string] {
+    let p = ($dir | path join PINNED)
+    if ($p | path exists) { (open --raw $p | str trim | str replace 'zig ' '') } else { null }
+}
+
+# One-line staleness check: pinned map version vs the installed zig. Returns a
+# human warning string when they differ (or the stamp is missing), else "".
+# Callers decide severity — discovery only answers "what's it called" and the
+# workflow re-confirms with zfact (live std), so reading WARNS; building the
+# baked lookup table (read later without zephem present) should refuse.
+export def zephem-staleness [dir: string] {
+    let pinned = (zephem-pinned $dir)
+    let live = (try { (zig-env).ver } catch { null })
+    if ($pinned == null) {
+        $"⚠ zephem map at ($dir) has no PINNED stamp — cannot verify it matches your zig; confirm names with `zfact`."
+    } else if (($live != null) and ($pinned != $live)) {
+        $"⚠ zephem map is pinned to zig ($pinned) but you're on ($live) — map may be stale; discovered names could be wrong. Regenerate zephem's map, or confirm each name with `zfact` \(reads live std)."
+    } else { "" }
+}

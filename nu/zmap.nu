@@ -20,6 +20,8 @@ def load-map [] {
     if not ($d | path join nodes.tsv | path exists) {
         error make {msg: $"zephem map not found at ($d) — clone zephem + run `nu scripts/build_std.nu`, or set $ZEPHEM_DATA"}
     }
+    let stale = (zephem-staleness $d)
+    if not ($stale | is-empty) { print -e $stale }   # warn on stderr; results still print
     let nodes = (open ($d | path join nodes.tsv))      # path depth kind name n_children detail
     let sigs  = (open ($d | path join sigs.tsv))       # path sig
     let docs  = (open ($d | path join docs.tsv))       # path doc
