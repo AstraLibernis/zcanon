@@ -4,8 +4,11 @@
 # Joins zephem's published per-decl datasets into ONE row per map node, so a single
 # line carries everything discovery needs:
 #   path · depth · kind · name · n_children · detail · sig · doc · rkind · rdetail · canon
+#   · ftype · fval · delegate
 # (rkind/rdetail = resolved.tsv's kind/detail, renamed to avoid colliding with the
-# parser's own kind/detail; canon = alias-family head, blank if not aliased.)
+# parser's own kind/detail; canon = alias-family head, blank if not aliased;
+# ftype/fval = fields.tsv's type/value for a field/tag node; delegate = delegates.tsv's
+# raw target for a delegating factory. All blank when not applicable.)
 #
 # This is a pure left-join over the map's nodes — same symbol universe as nodes.tsv,
 # just enriched. Deterministic: same zephem snapshot -> byte-identical lookup.tsv.
@@ -22,7 +25,7 @@ def lookup-path [] { $env.ZCANON_LOOKUP? | default ([$env.HOME ".config" zcanon 
 
 def main [--out: string, --force] {
     let d = (zephem-dir)
-    for f in [nodes.tsv sigs.tsv docs.tsv resolved.tsv canon.tsv] {
+    for f in [nodes.tsv sigs.tsv docs.tsv resolved.tsv canon.tsv fields.tsv delegates.tsv] {
         if not ($d | path join $f | path exists) {
             error make {msg: $"zephem dataset ($f) not found at ($d) — clone zephem + run `nu scripts/build_std.nu`, or set $ZEPHEM_DATA"}
         }
@@ -44,12 +47,16 @@ def main [--out: string, --force] {
     let docs  = (open ($d | path join docs.tsv))
     let resolved = (open ($d | path join resolved.tsv) | rename --column {kind: rkind, detail: rdetail})
     let canon = (open ($d | path join canon.tsv))
+    let fields = (open ($d | path join fields.tsv) | rename --column {type: ftype, value: fval})
+    let delegates = (open ($d | path join delegates.tsv) | rename --column {target: delegate})
 
     let lookup = ($nodes
         | join --left $sigs path
         | join --left $docs path
         | join --left $resolved path
-        | join --left $canon path)
+        | join --left $canon path
+        | join --left $fields path
+        | join --left $delegates path)
 
     # self-check: a left-join over nodes must preserve exactly the node rows.
     if ($lookup | length) != ($nodes | length) {

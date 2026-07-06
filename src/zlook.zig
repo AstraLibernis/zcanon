@@ -22,12 +22,16 @@ const V = @Vector(32, u8);
 // lookup.tsv columns (built by nu/build_lookup.nu), tab-separated:
 //   0 path · 1 depth · 2 kind · 3 name · 4 n_children · 5 detail
 //   6 sig  · 7 doc   · 8 rkind · 9 rdetail · 10 canon
+//   11 ftype · 12 fval · 13 delegate
 const COL_PATH = 0;
 const COL_KIND = 2;
 const COL_NAME = 3;
 const COL_SIG = 6;
 const COL_DOC = 7;
 const COL_RDETAIL = 9;
+const COL_FTYPE = 11; // a field/tag's written type (fields.tsv)
+const COL_FVAL = 12; // a field default / enum tag value (fields.tsv)
+const COL_DELEGATE = 13; // a delegating factory's raw target (delegates.tsv)
 
 inline fn lo(c: u8) u8 {
     return if (c >= 'A' and c <= 'Z') c + 32 else c;
@@ -166,7 +170,19 @@ pub fn main(init: std.process.Init) !void {
         const sig = field(h.line, COL_SIG);
         const res = field(h.line, COL_RDETAIL);
         const doc = field(h.line, COL_DOC);
+        const ftype = field(h.line, COL_FTYPE);
+        const fval = field(h.line, COL_FVAL);
+        const del = field(h.line, COL_DELEGATE);
         if (sig.len > 0) try out.print("      {s}\n", .{sig});
+        // a field/tag's payload: `: type = value`, `: type`, or `= value` (bare tag → nothing).
+        if (ftype.len > 0 and fval.len > 0) {
+            try out.print("      : {s} = {s}\n", .{ ftype, fval });
+        } else if (ftype.len > 0) {
+            try out.print("      : {s}\n", .{ftype});
+        } else if (fval.len > 0) {
+            try out.print("      = {s}\n", .{fval});
+        }
+        if (del.len > 0) try out.print("      ⇒ {s}\n", .{del}); // delegates to
         if (res.len > 0) try out.print("      → {s}\n", .{truncField(res, 140)});
         if (doc.len > 0) try out.print("      ⌁ {s}\n", .{truncField(doc, 120)});
     }
