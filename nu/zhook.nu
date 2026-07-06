@@ -221,9 +221,9 @@ def run-hook [] {
     # feed the findings back to me
     let flines = ($c.findings | each {|f| $"[($f.rule) ($f.severity)] ($fp | path basename):($f.line):($f.col)  ($f.message)" })
     let alines = ($c.ast_errs | each {|e| $"[ast-check] ($fp | path basename):($e.line):($e.col)  ($e.message)" })
-    let ctx = ($"zfact/zsnag checked ($fp | path basename) and flagged issues — please review and fix:\n\n" +
+    let ctx = ($"zsnag + ast-check flagged issues in ($fp | path basename) — please review and fix:\n\n" +
         (($flines | append $alines) | str join "\n") +
-        "\n\n\(Confirm current APIs with `zfact <symbol>` before changing.)")
+        "\n\n\(Confirm current std APIs against the zephem map: `zlook <name>`.)")
     {hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: ($ctx | str substring 0..9000)}} | to json
 }
 

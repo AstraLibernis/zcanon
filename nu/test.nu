@@ -1,11 +1,11 @@
 #!/usr/bin/env nu
-# test.nu — zcanon smoke battery. Asserts current std via the compiled Zig tools
-# (zfact, zsnag) plus the zephem map reader (zmap). Run against installed Zig.
+# test.nu — zcanon smoke battery. Asserts std facts via the map (zlook over the baked
+# lookup table + zmap over zephem's TSVs) and the zsnag linter. Run against installed Zig.
 #   nu nu/test.nu
 use lib.nu *
 
 let root = ($env.FILE_PWD | path dirname)
-let ZF = ($root | path join zig-out bin zfact)
+let ZL = ($root | path join zig-out bin zlook)
 let ZS = ($root | path join zig-out bin zsnag)
 let FX = ($root | path join test_fixtures)
 mut fail = 0
@@ -20,33 +20,23 @@ cd $root
 let build = (^zig build | complete)
 if $build.exit_code != 0 { print "FAIL: zig build"; print $build.stderr; exit 1 }
 
-# --- zfact lookup (compiled Zig) ---
-let cases = [
-    ["exact fn signature"        "Io.Reader.stream"     "pub fn stream(r: *Reader, w: *Writer"]
-    ["managed+unmanaged append"  "ArrayList.append"     "gpa: Allocator"]
-    ["doc comment captured"      "HashMap.put"          "Clobbers any existing data"]
-    ["fuzzy fallback"            "crypto.ChaCha20"      "fuzzy: declared name contains the query"]
-    ["one-hop @import resolve"   "crypto.ChaCha20IETF"  "via @import"]
-    ["stale namespace widens"    "fs.File.openFile"     "may be stale"]
-    ["true negative is clean"    "Io.Reader.frobnicate" "no `pub` decl named"]
-    ["cluster: name family"      "ArrayList.append"     "◆ family:"]
-    ["cluster: AssumeCapacity"   "ArrayList.append"     "skips the capacity/alloc check"]
-    ["cluster: see-also xref"    "HashMap.put"          "getOrPut"]
-]
-for c in $cases {
-    let o = (out-of $ZF [$c.1])
-    if ($o | str contains $c.2) {
-        print $"PASS: ($c.0)"
-    } else {
-        print $"FAIL: ($c.0) \(expected: ($c.2))"; $fail = 1
+# --- zlook: keyword lookup over the map's baked lookup.tsv (the primary std lookup) ---
+# Needs the lookup table (nu/build_lookup.nu); skip cleanly if absent.
+let lookup = ($env.ZCANON_LOOKUP? | default ($env.HOME | path join .config zcanon lookup.tsv))
+if ($lookup | path exists) {
+    let zcases = [
+        ["factory member path"        ["HashMap" "get"]      "std.hash_map.HashMap().get"]
+        ["factory member signature"   ["HashMap" "get"]      "fn get(self: Self, key: K) ?V"]
+        ["struct field + its type"    ["Allocator" "vtable"] "*const VTable"]
+        ["delegation target shown"    ["AutoHashMap"]        "HashMap("]
+        ["resolved error-set search"  ["OutOfMemory"]        "OutOfMemory"]
+    ]
+    for c in $zcases {
+        let o = (out-of $ZL $c.1)
+        if ($o | str contains $c.2) { print $"PASS: ($c.0)" } else { print $"FAIL: ($c.0) \(expected: ($c.2))"; $fail = 1 }
     }
-}
-
-# --sig suppresses the cluster (hook mode)
-if ((out-of $ZF ["ArrayList.append" "--sig"]) | str contains "◆ family:") {
-    print "FAIL: --sig should suppress cluster"; $fail = 1
 } else {
-    print "PASS: --sig suppresses cluster"
+    print $"SKIP: zlook test \(no lookup.tsv at ($lookup) — run nu nu/build_lookup.nu)"
 }
 
 # --- zmap reader (deterministic keyword search over the zephem map) ---

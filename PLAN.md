@@ -14,9 +14,10 @@ right facts and checks in front of it at the right time.
 ```
                          ┌─────────────── the model writes/edits Zig ───────────────┐
                          │                                                            │
-   BEFORE writing        │   the SKILL tells the model to:                            │
-   ──────────────        │     • zmap find <keywords>     → discover the current name │
-                         │     • zfact <Symbol>           → exact signature + variants │
+   BEFORE writing        │   the SKILL tells the model to search the MAP:            │
+   ──────────────        │     • zlook <keywords>   → discover the current name       │
+                         │     • zlook <name>       → signature + resolved type +     │
+                         │                            fields + factory members        │
                          │                                                            │
    AFTER an edit         │   the HOOK fires automatically:                            │
    ─────────────         │     • zig ast-check  → syntax/compile errors               │
@@ -24,16 +25,18 @@ right facts and checks in front of it at the right time.
                          │   findings are injected back into the model's context      │
                          └────────────────────────────────────────────────────────────┘
 
-   GROUND TRUTH:  the installed std (read live by zfact) + the compiler + your tests
+   GROUND TRUTH:  zephem's regenerable std map + the compiler + your tests
 ```
 
-Two tools = two moments:
-- **zfact** is *foresight* — consult before/while writing so the first draft is right.
+Two moments:
+- **the map** (via `zlook`/`zmap`) is *foresight* — consult before/while writing so the first
+  draft is right. It's the single source of std truth; there is no live-lookup fallback (a
+  shallow one would be less accurate). To refresh it, *regenerate zephem* — it's designed for it.
 - **zhook** (running zsnag + ast-check) is the *safety net* — catches what slipped through,
   right after the edit, with no need to remember.
 
-Ground truth is never the model's memory: `zfact` reads the std on disk, and the compiler
-and tests judge correctness.
+Ground truth is never the model's memory: the map is compiled+self-verified from the std on
+disk (regenerate when your Zig moves), and the compiler and tests judge correctness.
 
 ## The keystone: the skill
 
@@ -49,7 +52,10 @@ Install paths for the skill (pick one):
 ## Roadmap
 
 **Done**
-- `zfact` (Zig) — current-API lookup + neighborhood cluster (variants, cross-refs, efficiency)
+- `zlook` (Zig) — SIMD keyword search over zephem's map: signature + resolved type/error-set +
+  doc + fields/tags + factory members + delegation, ranked, structured. The single std lookup.
+  (Replaced `zfact`, the live-std top-level scanner — removed as a half-accurate fallback that
+  undercut the accuracy premise; the map is complete and regenerable, so it stands alone.)
 - `zsnag` (Zig) — 10 verified LLM-mistake rules, tokenizer-based; validated on real third-party code
 - `zmap` (Nushell) — deterministic reader over zephem's complete std map: keyword `find`, `show` a module, `doc` a path (replaced the removed embedding/pgvector search)
 - `zhook` (Nushell) — automatic, reversible PostToolUse checker; **logs every finding to the book**

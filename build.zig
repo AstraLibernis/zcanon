@@ -5,8 +5,9 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Analysis tools that read/judge Zig source — written in Zig (dogfood).
-    // zlook: SIMD keyword search over the denormalized zephem lookup table.
-    const tools = [_][]const u8{ "zsnag", "zfact", "zlook" };
+    // zsnag: LLM-footgun linter.  zlook: SIMD keyword search over the zephem lookup table
+    // (the map is the single source of std truth; regenerate zephem to refresh it).
+    const tools = [_][]const u8{ "zsnag", "zlook" };
     inline for (tools) |name| {
         const exe = b.addExecutable(.{
             .name = name,

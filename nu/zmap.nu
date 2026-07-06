@@ -9,8 +9,8 @@
 #   zmap show std.fmt              list one module/namespace subtree
 #   zmap doc std.fmt.parseInt      signature + doc for one exact path
 #
-# Reads zephem's TSVs at $ZEPHEM_DATA (default ~/projects/zephem/data/std). For a
-# chosen name, confirm the CURRENT signature with `zfact <name>` (reads live std).
+# Reads zephem's TSVs at $ZEPHEM_DATA (default ~/projects/zephem/data/std) — the sole
+# source of truth. If the map's PINNED zig differs from yours, regenerate zephem.
 use lib.nu *
 
 def zephem-dir [] { $env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data std] | path join) }
@@ -77,7 +77,7 @@ def cmd-doc [map: table, path: string] {
     let doc = ($r.doc? | default '')
     if not ($sig | is-empty) { print $"  ($sig)" }
     if not ($doc | is-empty) { print $"\n  ($doc)" }
-    print "\n(snapshot from the map — confirm the CURRENT signature with: zfact <name>)"
+    print "\n(from the zephem map — the source of truth; if it's stale, regenerate zephem)"
 }
 
 def main [cmd?: string, ...args: string, --limit (-l): int = 12] {

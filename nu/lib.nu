@@ -1,8 +1,9 @@
 # lib.nu — shared glue for zcanon's Nushell tools.
-# zcanon reads ground truth two ways, both dependency-light: the Zig binaries
-# (zfact, zsnag) analyse the installed std directly, and the Nushell tools read
-# zephem's complete verified std map (zmap) + keep the local mistake log (the book,
-# one sqlite file). No database server, no embedding models.
+# Ground truth is zephem's complete, self-verified std map. The Zig binaries are
+# dependency-light: zlook searches the map's baked lookup table, zsnag lints edited
+# source. The Nushell tools read the map directly (zmap) + keep the local mistake log
+# (the book, one sqlite file). No live-std fallback (a shallow one would be less
+# accurate than the map), no database server, no embedding models.
 
 # Installed Zig's std dir + version (the source of truth — never snapshot it).
 export def zig-env [] {
@@ -53,15 +54,16 @@ export def zephem-pinned [dir: string] {
 
 # One-line staleness check: pinned map version vs the installed zig. Returns a
 # human warning string when they differ (or the stamp is missing), else "".
-# Callers decide severity — discovery only answers "what's it called" and the
-# workflow re-confirms with zfact (live std), so reading WARNS; building the
-# baked lookup table (read later without zephem present) should refuse.
+# The map is the SOLE source of truth — there is no live fallback — so on a version
+# mismatch the fix is to REGENERATE zephem, never to trust memory. Callers decide
+# severity: reading WARNS; building the baked lookup table (read later without zephem
+# present) should refuse.
 export def zephem-staleness [dir: string] {
     let pinned = (zephem-pinned $dir)
     let live = (try { (zig-env).ver } catch { null })
     if ($pinned == null) {
-        $"⚠ zephem map at ($dir) has no PINNED stamp — cannot verify it matches your zig; confirm names with `zfact`."
+        $"⚠ zephem map at ($dir) has no PINNED stamp — cannot verify it matches your zig; regenerate it with `nu scripts/build_std.nu` in zephem."
     } else if (($live != null) and ($pinned != $live)) {
-        $"⚠ zephem map is pinned to zig ($pinned) but you're on ($live) — map may be stale; discovered names could be wrong. Regenerate zephem's map, or confirm each name with `zfact` \(reads live std)."
+        $"⚠ zephem map is pinned to zig ($pinned) but you're on ($live) — map may be stale; discovered facts could be wrong. Regenerate zephem's map: `nu scripts/build_std.nu` then `nu nu/build_lookup.nu`."
     } else { "" }
 }

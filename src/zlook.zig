@@ -13,8 +13,8 @@
 //!
 //! The first-byte scan is SIMD (`@Vector(32, u8)` → AVX2 `vpcmpeqb`), so it greps the
 //! ~2 MB table in single-digit ms. Reads `$ZEPHEM_DATA/lookup.tsv` (default
-//! ~/projects/zephem/data/std/lookup.tsv); regenerate it with `nu/build_lookup.nu`.
-//! Confirm the CURRENT signature of a chosen name with `zfact <name>` (reads live std).
+//! ~/projects/zephem/data/std/lookup.tsv). The map is the sole source of std truth; if its
+//! PINNED zig differs from yours, regenerate zephem then `nu/build_lookup.nu` — never guess.
 const std = @import("std");
 const Io = std.Io;
 const V = @Vector(32, u8);
@@ -186,6 +186,6 @@ pub fn main(init: std.process.Init) !void {
         if (res.len > 0) try out.print("      → {s}\n", .{truncField(res, 140)});
         if (doc.len > 0) try out.print("      ⌁ {s}\n", .{truncField(doc, 120)});
     }
-    try out.print("\n(snapshot — confirm the CURRENT signature with: zfact <name>)\n", .{});
+    try out.print("\n(from the zephem map — the source of truth; if stale, regenerate zephem)\n", .{});
     try out.flush();
 }

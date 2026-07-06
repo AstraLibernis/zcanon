@@ -21,12 +21,12 @@ truth, never the model's memory.
 
 The tools that read and judge Zig source are written **in Zig** (the project dogfoods
 itself); the glue — reading the map and keeping the log — is written **in Nushell**.
-No database server, no embedding models: the two Zig binaries read live std, and the
-Nushell tools read plain files (zephem's std map + one sqlite log).
+No database server, no embedding models: the ground truth is zephem's complete, self-
+verified std map. `zsnag` lints the edited source, `zlook` searches the map's baked
+lookup table, and the Nushell tools read the map's plain files (+ one sqlite log).
 
 | Tool | Lang | Job | Needs |
 |------|------|-----|-------|
-| `zig-out/bin/zfact` | Zig | Look up the **current** signature of a std symbol + its neighborhood (variants, cross-refs, efficiency notes) | nothing (reads local std) |
 | `zig-out/bin/zsnag` | Zig | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
 | `zig-out/bin/zlook` | Zig | **Fast keyword discovery** over the whole map in one shot — SIMD (AVX2) search across name·path·signature·doc·**resolved type/error-set**·alias, ranked, structured output | a lookup table (`nu/build_lookup.nu`) |
 | `nu/zmap.nu` | Nushell | Read the complete std map — `find`, `show` a module, `doc` a path. Same map as `zlook`, via Nushell (no lookup table needed) | zephem's std map (TSVs) |
@@ -50,15 +50,15 @@ local state in **one sqlite file** (`~/.config/zcanon/book.db`, override
 ```sh
 git clone https://codeberg.org/AstraLibernis/zcanon.git
 cd zcanon
-zig build                              # builds zig-out/bin/{zfact,zsnag,zlook}
+zig build                              # builds zig-out/bin/{zsnag,zlook}
 
-# 1. always-on tools work immediately:
-zig-out/bin/zfact Io.Reader.stream
+# 1. the linter works immediately (reads the file you give it):
 zig-out/bin/zsnag yourfile.zig
 
-# (optional) fast structured discovery — build the lookup table once, then search:
+# 2. discovery + lookup — build the map's lookup table once, then search:
 nu nu/build_lookup.nu                  # joins zephem's TSVs -> ~/.config/zcanon/lookup.tsv
-zig-out/bin/zlook parse int            # ranked hits: signature + resolved type + doc
+zig-out/bin/zlook parse int            # ranked hits: signature + resolved type + doc + fields
+zig-out/bin/zlook HashMap get          # a factory member: std.HashMap().get
 zig-out/bin/zlook OutOfMemory          # find fns by RESOLVED error set, not just name
 
 # 2. the auto-checker hook (reversible — see below):
@@ -95,8 +95,8 @@ in `PLAN.md`.
 ## Layout
 
 ```
-src/      the Zig tools (zfact.zig, zsnag.zig) + build.zig
-nu/       the Nushell glue (zmap, zhook, zbook, test, lib)
+src/      the Zig tools (zsnag.zig, zlook.zig) + build.zig
+nu/       the Nushell glue (zmap, zhook, zbook, build_lookup, test, lib)
 sql/      schema_zig_log.sql — the sqlite book
 skill/    SKILL.md — the instruction that wires the tools into how the model writes Zig
 test_fixtures/  smoke + false-positive regression fixtures

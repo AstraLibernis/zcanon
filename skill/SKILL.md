@@ -3,19 +3,21 @@ name: zcanon
 description: >-
   Use whenever writing, editing, or reviewing Zig (.zig) code. Your training
   knowledge of Zig's fast-moving standard library is likely stale; zcanon grounds
-  every std API call in the ACTUAL installed std and flags the common LLM Zig
-  mistakes. Reach for it any time a task produces or changes Zig.
+  every std API call in zephem's map of the ACTUAL std — a complete, self-verified,
+  regenerable snapshot — and flags the common LLM Zig mistakes. Reach for it any
+  time a task produces or changes Zig.
 ---
 
 # Writing Zig with zcanon
 
 Your memory of Zig's standard library is probably out of date — Zig changes fast and
-its std churns. **Do not write std signatures from memory.** Verify against the
-installed std with the zcanon tools first. Replace recall with ground truth.
+its std churns. **Do not write std signatures from memory.** Verify against the **zephem
+map** — a complete, self-verified, *regenerable* snapshot of the actual std — first.
+Replace recall with ground truth.
 
-The tools live at **`~/projects/zcanon`** (the two Zig binaries are prebuilt under
-`zig-out/bin/`; the Nushell tools run with `nu`). Use full paths so they work from any
-directory:
+The tools live at **`~/projects/zcanon`** (the two Zig binaries — `zlook`, `zsnag` — are
+prebuilt under `zig-out/bin/`; the Nushell tools run with `nu`). Use full paths so they
+work from any directory:
 
 ## Before you write a std API call
 
@@ -36,15 +38,27 @@ directory:
    rethink the wording and search again. Use `show <module>` when you know the
    neighborhood but not the exact name.
 
-2. **Know the name? Confirm the exact CURRENT signature** and see the neighborhood:
+2. **Know the name? Look it up in the map** for its exact signature, resolved type, doc,
+   fields/tags, and factory members:
    ```sh
-   ~/projects/zcanon/zig-out/bin/zfact Io.Reader.streamDelimiter
+   ~/projects/zcanon/zig-out/bin/zlook Io.Reader.streamDelimiter
+   ~/projects/zcanon/zig-out/bin/zlook HashMap get         # a factory member: Type().method
    ```
-   `zfact` reads the **live installed std** (the map is a pinned snapshot — always
-   confirm the signature with `zfact` before you write it). Its output lists the
-   symbol's family and any "use X instead" notes — prefer the most efficient variant
-   (e.g. `appendAssumeCapacity` after `ensureTotalCapacity`), not just the first thing
-   that compiles.
+   The map carries everything you need to write the call — the as-written signature, the
+   compiler-resolved type/error-set, a struct's field types, an enum's tags, and the
+   members a `fn(…) type` factory produces (pathed `Type().method`). Prefer the most
+   efficient variant it surfaces (`appendAssumeCapacity` after `ensureTotalCapacity`), not
+   just the first thing that compiles.
+
+**The map is the single source of std truth** — no live-lookup fallback, by design (a
+shallow fallback would be *less* accurate, defeating the point). It is a **regenerable**
+snapshot pinned to a Zig version, so it's authoritative, not a guess. If it's stale — its
+`PINNED` zig differs from your installed zig, and the tools warn you — **regenerate it**,
+never fall back to memory:
+```sh
+cd ~/projects/zephem && nu scripts/build_std.nu    # rebuild the map (self-verifies)
+nu ~/projects/zcanon/nu/build_lookup.nu            # refresh zlook's index from it
+```
 
 ## After you edit a .zig file
 

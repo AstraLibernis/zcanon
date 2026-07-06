@@ -1,3 +1,9 @@
+> **ARCHIVED (2026-07-06).** `zfact` was removed. It read live std but only top-level decls
+> and fuzzy-matched — half-accurate, which undercut zcanon's whole premise (accuracy). The
+> zephem **map** is complete and *regenerable*, so it is now the single source of std truth
+> (searched via `zlook`/`zmap`); there is deliberately no live-lookup fallback. Kept for the
+> design reasoning only. See `PLAN.md`.
+
 # zfact
 
 A zero-dependency **current-Zig-std API fact-checker**, built to fight one specific
