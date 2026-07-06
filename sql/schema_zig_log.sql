@@ -2,7 +2,7 @@
 -- hook as they happen on actual .zig edits, labeled by zsnag + zig ast-check.
 --
 -- SQLite (was postgres). The book is single-user local state — it needs no server,
--- so it lives in one file (~/.config/zforge/book.db, override $ZFORGE_BOOK). The
+-- so it lives in one file (~/.config/zcanon/book.db, override $ZCANON_BOOK). The
 -- hook applies this schema idempotently on first write; no setup step. The semantic
 -- INDEX (zig_api/zig_map) stays on postgres+pgvector — that one needs vector search.
 --

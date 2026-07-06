@@ -1,10 +1,10 @@
-# zforge — how the pieces tie together
+# zcanon — how the pieces tie together
 
 ## The goal
 
 A portable pack that, installed next to an LLM, makes it write current, correct Zig
 immediately — and that can grow toward feeding real data back to the Zig project itself.
-The LLM writes the code and does the reasoning; zforge controls **what the model knows at
+The LLM writes the code and does the reasoning; zcanon controls **what the model knows at
 the moment it writes**. That is the only lever (the model is stateless — its output is
 decided entirely by what is in its context), so everything here is about getting the
 right facts and checks in front of it at the right time.
@@ -43,7 +43,7 @@ trap that kills any tool that depends on discipline). The skill is therefore the
 that turns "a few scripts on disk" into "install once, better Zig everywhere."
 
 Install paths for the skill (pick one):
-- copy/symlink `skill/SKILL.md` into `~/.claude/skills/zforge/SKILL.md` (global), or
+- copy/symlink `skill/SKILL.md` into `~/.claude/skills/zcanon/SKILL.md` (global), or
 - reference it from a project's `CLAUDE.md`.
 
 ## Roadmap
@@ -87,7 +87,7 @@ messages are cryptic. That is a concrete, grounded contribution to the Zig proje
 
 ## Honest ceiling
 
-zforge makes the model **current and self-checking**, not a better reasoner. It removes
+zcanon makes the model **current and self-checking**, not a better reasoner. It removes
 the dominant failure (stale API knowledge) and catches known traps. Novel logic bugs are
-still caught only by the compiler, your tests, and the model's own reasoning — zforge
+still caught only by the compiler, your tests, and the model's own reasoning — zcanon
 feeds those, it does not replace them.

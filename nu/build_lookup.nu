@@ -10,15 +10,15 @@
 # This is a pure left-join over the map's nodes — same symbol universe as nodes.tsv,
 # just enriched. Deterministic: same zephem snapshot -> byte-identical lookup.tsv.
 #
-#   nu nu/build_lookup.nu                 # write ~/.config/zforge/lookup.tsv (what zlook reads)
+#   nu nu/build_lookup.nu                 # write ~/.config/zcanon/lookup.tsv (what zlook reads)
 #   nu nu/build_lookup.nu --out other.tsv
 #
 # Reads zephem's source TSVs at $ZEPHEM_DATA (default ~/projects/zephem/data/std);
-# writes the lookup table zforge owns at $ZFORGE_LOOKUP (default ~/.config/zforge/lookup.tsv).
+# writes the lookup table zcanon owns at $ZCANON_LOOKUP (default ~/.config/zcanon/lookup.tsv).
 use lib.nu *
 
 def zephem-dir [] { $env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data std] | path join) }
-def lookup-path [] { $env.ZFORGE_LOOKUP? | default ([$env.HOME ".config" zforge lookup.tsv] | path join) }
+def lookup-path [] { $env.ZCANON_LOOKUP? | default ([$env.HOME ".config" zcanon lookup.tsv] | path join) }
 
 def main [--out: string, --force] {
     let d = (zephem-dir)

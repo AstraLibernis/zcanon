@@ -1,4 +1,4 @@
-# zforge
+# zcanon
 
 A portable **Zig-competence pack for an LLM**. Drop it next to Claude (or any coding
 agent) and it writes *current, correct* Zig immediately — by keeping the model grounded
@@ -7,14 +7,14 @@ in the real installed standard library and catching the mistakes an LLM tends to
 It is **not** a linter you run for its own sake, and **not** a replacement for the Zig
 compiler. It is plumbing: tools that put ground truth and self-checks in front of the
 model at the moment it writes code. The model still does the writing and the reasoning;
-zforge removes the thing that usually sabotages it — stale knowledge of a fast-moving
+zcanon removes the thing that usually sabotages it — stale knowledge of a fast-moving
 language.
 
 ## Why it exists
 
 An LLM writes broken Zig mostly for one reason: its training is out of date, and Zig's
 standard library changes fast. The model confidently calls APIs that moved or were
-removed. zforge attacks that directly — it reads *this machine's* std as the source of
+removed. zcanon attacks that directly — it reads *this machine's* std as the source of
 truth, never the model's memory.
 
 ## The pieces
@@ -41,15 +41,15 @@ hit is never missed and never mis-ranked; the LLM supplies the meaning by choosi
 mechanism words. (The old embedding/vector search — postgres+pgvector+ollama — was
 removed: a weak embedding model is worse than letting a capable LLM search the full
 map.) The **book** (`zig_log`, written by `zhook`, read by `zbook`) is single-user
-local state in **one sqlite file** (`~/.config/zforge/book.db`, override
-`$ZFORGE_BOOK`) — no server, auto-created on first write. It records what the model
+local state in **one sqlite file** (`~/.config/zcanon/book.db`, override
+`$ZCANON_BOOK`) — no server, auto-created on first write. It records what the model
 *actually* gets wrong on real edits, judged by the compiler — no synthetic generation.
 
 ## Install
 
 ```sh
-git clone https://codeberg.org/AstraLibernis/zforge.git
-cd zforge
+git clone https://codeberg.org/AstraLibernis/zcanon.git
+cd zcanon
 zig build                              # builds zig-out/bin/{zfact,zsnag,zlook}
 
 # 1. always-on tools work immediately:
@@ -57,7 +57,7 @@ zig-out/bin/zfact Io.Reader.stream
 zig-out/bin/zsnag yourfile.zig
 
 # (optional) fast structured discovery — build the lookup table once, then search:
-nu nu/build_lookup.nu                  # joins zephem's TSVs -> ~/.config/zforge/lookup.tsv
+nu nu/build_lookup.nu                  # joins zephem's TSVs -> ~/.config/zcanon/lookup.tsv
 zig-out/bin/zlook parse int            # ranked hits: signature + resolved type + doc
 zig-out/bin/zlook OutOfMemory          # find fns by RESOLVED error set, not just name
 
@@ -69,7 +69,7 @@ nu nu/zmap.nu find hash password       # keyword search the whole map
 nu nu/zmap.nu show std.crypto.pwhash   # browse a module
 
 # 4. the book — log real mistakes the hook catches, then read them back:
-#    (no setup: the hook auto-creates ~/.config/zforge/book.db on first .zig edit)
+#    (no setup: the hook auto-creates ~/.config/zcanon/book.db on first .zig edit)
 nu nu/zbook.nu                         # table of contents, ranked by frequency
 ```
 
@@ -82,7 +82,7 @@ intact.
 - **Does:** keep API usage current, surface the best variant, catch known footguns, run
   the compiler's syntax check on every edit, and find APIs by concept.
 - **Does not:** make the model reason better, judge your algorithm, or guarantee
-  correctness. The compiler and your tests remain the real safety net; zforge keeps the
+  correctness. The compiler and your tests remain the real safety net; zcanon keeps the
   model from being confidently wrong about the API surface.
 
 ## Status

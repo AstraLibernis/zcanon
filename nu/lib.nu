@@ -1,5 +1,5 @@
-# lib.nu — shared glue for zforge's Nushell tools.
-# zforge reads ground truth two ways, both dependency-light: the Zig binaries
+# lib.nu — shared glue for zcanon's Nushell tools.
+# zcanon reads ground truth two ways, both dependency-light: the Zig binaries
 # (zfact, zsnag) analyse the installed std directly, and the Nushell tools read
 # zephem's complete verified std map (zmap) + keep the local mistake log (the book,
 # one sqlite file). No database server, no embedding models.
@@ -15,9 +15,9 @@ export def zig-env [] {
 
 # ---- the book (sqlite) ---------------------------------------------------
 # The mistake log is single-user local state: ONE sqlite file, no server needed.
-# Book path: $ZFORGE_BOOK, else ~/.config/zforge/book.db.
+# Book path: $ZCANON_BOOK, else ~/.config/zcanon/book.db.
 export def book-db [] {
-    $env.ZFORGE_BOOK? | default ($env.HOME | path join .config zforge book.db)
+    $env.ZCANON_BOOK? | default ($env.HOME | path join .config zcanon book.db)
 }
 
 # Apply the schema idempotently so the book auto-creates on first use — no setup.

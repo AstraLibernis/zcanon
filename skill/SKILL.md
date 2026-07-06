@@ -1,19 +1,19 @@
 ---
-name: zforge
+name: zcanon
 description: >-
   Use whenever writing, editing, or reviewing Zig (.zig) code. Your training
-  knowledge of Zig's fast-moving standard library is likely stale; zforge grounds
+  knowledge of Zig's fast-moving standard library is likely stale; zcanon grounds
   every std API call in the ACTUAL installed std and flags the common LLM Zig
   mistakes. Reach for it any time a task produces or changes Zig.
 ---
 
-# Writing Zig with zforge
+# Writing Zig with zcanon
 
 Your memory of Zig's standard library is probably out of date — Zig changes fast and
 its std churns. **Do not write std signatures from memory.** Verify against the
-installed std with the zforge tools first. Replace recall with ground truth.
+installed std with the zcanon tools first. Replace recall with ground truth.
 
-The tools live at **`~/projects/zforge`** (the two Zig binaries are prebuilt under
+The tools live at **`~/projects/zcanon`** (the two Zig binaries are prebuilt under
 `zig-out/bin/`; the Nushell tools run with `nu`). Use full paths so they work from any
 directory:
 
@@ -23,13 +23,13 @@ directory:
    is deterministic — every literal match across all names/signatures/docs is returned,
    ranked name-first (no fuzzy model, no missed answers). Prefer `zlook` (SIMD-fast, one
    shot, also searches the **resolved type/error-set** — e.g. find every fn that returns
-   `OutOfMemory`); it needs a one-time `nu ~/projects/zforge/nu/build_lookup.nu`. `zmap`
+   `OutOfMemory`); it needs a one-time `nu ~/projects/zcanon/nu/build_lookup.nu`. `zmap`
    is the Nushell equivalent that reads zephem's TSVs directly (no lookup table):
    ```sh
-   ~/projects/zforge/zig-out/bin/zlook parse int         # AND of all terms, structured hits
-   ~/projects/zforge/zig-out/bin/zlook OutOfMemory       # find fns by resolved error set
-   nu ~/projects/zforge/nu/zmap.nu find "constant time"  # zmap: quote a multi-word term
-   nu ~/projects/zforge/nu/zmap.nu show std.fmt          # browse a whole module/subtree
+   ~/projects/zcanon/zig-out/bin/zlook parse int         # AND of all terms, structured hits
+   ~/projects/zcanon/zig-out/bin/zlook OutOfMemory       # find fns by resolved error set
+   nu ~/projects/zcanon/nu/zmap.nu find "constant time"  # zmap: quote a multi-word term
+   nu ~/projects/zcanon/nu/zmap.nu show std.fmt          # browse a whole module/subtree
    ```
    **YOU are the semantic layer.** Pick the mechanism words you'd expect to see in std's
    own names/docs ("delimiter", "alloc", "parse", "hash"), search, and if nothing lands,
@@ -38,7 +38,7 @@ directory:
 
 2. **Know the name? Confirm the exact CURRENT signature** and see the neighborhood:
    ```sh
-   ~/projects/zforge/zig-out/bin/zfact Io.Reader.streamDelimiter
+   ~/projects/zcanon/zig-out/bin/zfact Io.Reader.streamDelimiter
    ```
    `zfact` reads the **live installed std** (the map is a pinned snapshot — always
    confirm the signature with `zfact` before you write it). Its output lists the
@@ -53,9 +53,9 @@ The `zhook` PostToolUse hook runs **automatically** on every `.zig` edit and fee
 - `zsnag` — known LLM footguns (the list below)
 
 Read those findings and fix them before moving on. They are also recorded to a local
-log ("the book", `~/.config/zforge/book.db`); review recurring patterns with
-`nu ~/projects/zforge/nu/zbook.nu`. If the hook is somehow not active, run the check
-yourself: `~/projects/zforge/zig-out/bin/zsnag <file>`.
+log ("the book", `~/.config/zcanon/book.db`); review recurring patterns with
+`nu ~/projects/zcanon/nu/zbook.nu`. If the hook is somehow not active, run the check
+yourself: `~/projects/zcanon/zig-out/bin/zsnag <file>`.
 
 ## Mistakes to avoid (zsnag checks these)
 

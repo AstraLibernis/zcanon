@@ -53,7 +53,7 @@ the accelerated box, overnight." With `--all` (undocumented too) it is ~4× larg
    - `psql ... -f sql/schema_zig_api.sql`
    - `nu nu/zindex.nu` (builds `zig_api` for the installed Zig version)
    - Confirm: `SELECT zig_version, count(*) FROM zig_api GROUP BY zig_version;`
-4. **zforge built**: `zig build` (gives `zig-out/bin/{zfact,zsnag}`).
+4. **zcanon built**: `zig build` (gives `zig-out/bin/{zfact,zsnag}`).
 
 ---
 
@@ -142,9 +142,9 @@ Sketch (adapt to a finalized `nu` script — `proto_tags.nu` is the working star
 # hot chapters first, each resumable; log everything
 for m in mem fmt fs Io heap ArrayList hash_map json ; do
     nu nu/enrich.nu build --module $m
-done 2>&1 | tee ~/zforge-enrich-$(date +%Y%m%d).log
+done 2>&1 | tee ~/zcanon-enrich-$(date +%Y%m%d).log
 # then the long tail (everything still NULL):
-nu nu/enrich.nu build 2>&1 | tee -a ~/zforge-enrich-$(date +%Y%m%d).log
+nu nu/enrich.nu build 2>&1 | tee -a ~/zcanon-enrich-$(date +%Y%m%d).log
 ```
 
 In the morning: check the log tail, and

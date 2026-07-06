@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 # zbook — read the book: the corpus of real Zig mistakes that zhook captures live
-# into the sqlite book (~/.config/zforge/book.db) as they happen on actual .zig
+# into the sqlite book (~/.config/zcanon/book.db) as they happen on actual .zig
 # edits. Frequency is the signal — this is what the model genuinely gets wrong, not
 # a guess or a synthetic.
 #
@@ -20,7 +20,7 @@ def show-toc [] {
         return
     }
     let total = ($toc | get findings | math sum)
-    print $"# zforge book — ($total) distinct findings across ($toc | length) rules \(occurrences = total recurrences)\n"
+    print $"# zcanon book — ($total) distinct findings across ($toc | length) rules \(occurrences = total recurrences)\n"
     $toc | table
 }
 

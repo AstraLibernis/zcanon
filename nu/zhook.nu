@@ -18,14 +18,14 @@
 
 use lib.nu *
 
-const MARKER = "zforge-zig-hook"
+const MARKER = "zcanon-zig-hook"
 
 def here   [] { $env.FILE_PWD }
 def root   [] { $env.FILE_PWD | path dirname }
 def zsnag  [] { root | path join zig-out bin zsnag }
 def self   [] { here | path join zhook.nu }
-def flag   [] { $nu.home-dir | path join .config zforge hook.disabled }
-def settings-path [] { $env.ZFORGE_SETTINGS? | default ($nu.home-dir | path join .claude settings.json) }
+def flag   [] { $nu.home-dir | path join .config zcanon hook.disabled }
+def settings-path [] { $env.ZCANON_SETTINGS? | default ($nu.home-dir | path join .claude settings.json) }
 
 # ---- management ----------------------------------------------------------
 def do-disable [] {

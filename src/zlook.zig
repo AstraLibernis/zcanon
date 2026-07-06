@@ -1,6 +1,6 @@
 //! zlook — fast structured lookup over the denormalized zephem "lookup" table.
 //!
-//! The discovery half of zforge: keyword search over the WHOLE mapped std in one
+//! The discovery half of zcanon: keyword search over the WHOLE mapped std in one
 //! shot — name · path · as-written signature · `///` doc · resolved type/error-set
 //! · canonical alias — all pre-joined into one row per decl by `nu/build_lookup.nu`.
 //! Every term must appear (case-insensitive, AND) somewhere in the row; matches are
@@ -124,16 +124,16 @@ pub fn main(init: std.process.Init) !void {
         terms[i] = d;
     }
 
-    // ---- locate lookup.tsv: $ZFORGE_LOOKUP, else ~/.config/zforge/lookup.tsv ----
-    const path = if (init.environ_map.get("ZFORGE_LOOKUP")) |p|
+    // ---- locate lookup.tsv: $ZCANON_LOOKUP, else ~/.config/zcanon/lookup.tsv ----
+    const path = if (init.environ_map.get("ZCANON_LOOKUP")) |p|
         p
     else if (init.environ_map.get("HOME")) |h|
-        try std.fs.path.join(a, &.{ h, ".config", "zforge", "lookup.tsv" })
+        try std.fs.path.join(a, &.{ h, ".config", "zcanon", "lookup.tsv" })
     else
         "lookup.tsv";
 
     const buf = std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited) catch {
-        try out.print("zlook: no lookup table at {s}\n  build it: nu ~/projects/zforge/nu/build_lookup.nu  (needs zephem's data/std)\n", .{path});
+        try out.print("zlook: no lookup table at {s}\n  build it: nu ~/projects/zcanon/nu/build_lookup.nu  (needs zephem's data/std)\n", .{path});
         try out.flush();
         return;
     };

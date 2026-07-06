@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# test.nu — zforge smoke battery. Asserts current std via the compiled Zig tools
+# test.nu — zcanon smoke battery. Asserts current std via the compiled Zig tools
 # (zfact, zsnag) plus the zephem map reader (zmap). Run against installed Zig.
 #   nu nu/test.nu
 use lib.nu *
