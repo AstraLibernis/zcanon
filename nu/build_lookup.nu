@@ -25,7 +25,7 @@ def lookup-path [] { $env.ZCANON_LOOKUP? | default ([$env.HOME ".config" zcanon 
 
 def main [--out: string, --force] {
     let d = (zephem-dir)
-    for f in [nodes.tsv sigs.tsv docs.tsv resolved.tsv canon.tsv fields.tsv delegates.tsv] {
+    for f in ["extracted/nodes.tsv" "extracted/sigs.tsv" "extracted/docs.tsv" "extracted/resolved.tsv" "derived/canon.tsv" "extracted/fields.tsv" "extracted/delegates.tsv"] {
         if not ($d | path join $f | path exists) {
             error make {msg: $"zephem dataset ($f) not found at ($d) — clone zephem + run `nu scripts/build_std.nu`, or set $ZEPHEM_DATA"}
         }
@@ -42,13 +42,13 @@ def main [--out: string, --force] {
     let out = ($out | default (lookup-path))
     mkdir ($out | path dirname)
 
-    let nodes = (open ($d | path join nodes.tsv))
-    let sigs  = (open ($d | path join sigs.tsv))
-    let docs  = (open ($d | path join docs.tsv))
-    let resolved = (open ($d | path join resolved.tsv) | rename --column {kind: rkind, detail: rdetail})
-    let canon = (open ($d | path join canon.tsv))
-    let fields = (open ($d | path join fields.tsv) | rename --column {type: ftype, value: fval})
-    let delegates = (open ($d | path join delegates.tsv) | rename --column {target: delegate})
+    let nodes = (open ($d | path join extracted nodes.tsv))
+    let sigs  = (open ($d | path join extracted sigs.tsv))
+    let docs  = (open ($d | path join extracted docs.tsv))
+    let resolved = (open ($d | path join extracted resolved.tsv) | rename --column {kind: rkind, detail: rdetail})
+    let canon = (open ($d | path join derived canon.tsv))
+    let fields = (open ($d | path join extracted fields.tsv) | rename --column {type: ftype, value: fval})
+    let delegates = (open ($d | path join extracted delegates.tsv) | rename --column {target: delegate})
 
     let lookup = ($nodes
         | join --left $sigs path

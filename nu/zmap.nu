@@ -17,14 +17,14 @@ def zephem-dir [] { $env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data
 
 def load-map [] {
     let d = (zephem-dir)
-    if not ($d | path join nodes.tsv | path exists) {
+    if not ($d | path join extracted nodes.tsv | path exists) {
         error make {msg: $"zephem map not found at ($d) — clone zephem + run `nu scripts/build_std.nu`, or set $ZEPHEM_DATA"}
     }
     let stale = (zephem-staleness $d)
     if not ($stale | is-empty) { print -e $stale }   # warn on stderr; results still print
-    let nodes = (open ($d | path join nodes.tsv))      # path depth kind name n_children detail
-    let sigs  = (open ($d | path join sigs.tsv))       # path sig
-    let docs  = (open ($d | path join docs.tsv))       # path doc
+    let nodes = (open ($d | path join extracted nodes.tsv))      # path depth kind name n_children detail
+    let sigs  = (open ($d | path join extracted sigs.tsv))       # path sig
+    let docs  = (open ($d | path join extracted docs.tsv))       # path doc
     $nodes | join --left $sigs path | join --left $docs path
 }
 

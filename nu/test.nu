@@ -43,7 +43,7 @@ if ($lookup | path exists) {
 # Only if the zephem map is present (the reader's only dependency, no server).
 let zmap = ($root | path join nu zmap.nu)
 let zdata = ($env.ZEPHEM_DATA? | default ([$env.HOME projects zephem data std] | path join))
-if ($zdata | path join nodes.tsv | path exists) {
+if ($zdata | path join extracted nodes.tsv | path exists) {
     # the case the old embedding search failed: "parse int" must surface fmt.parseInt
     let pi = (^nu $zmap find parse int --limit 5 | complete | get stdout)
     if ($pi | str contains "std.fmt.parseInt") {
