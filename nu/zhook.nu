@@ -172,11 +172,13 @@ def check-file [fp: string] {
     let src = (try { open --raw $fp | lines } catch { [] })
     let ver = (try { (zig-env).ver } catch { "?" })
 
-    # zsnag findings, structured (--json; writes to stderr). exits 0 with or without
-    # findings, so a nonzero exit means it actually failed → don't trust emptiness.
+    # zsnag findings, structured (--json; writes to stderr). It exits 0 when clean and
+    # 1 when an error-severity finding is present (a normal outcome, not a crash), so a
+    # real failure is exit_code > 1 (panic/abort) or a missing binary (null) — both of
+    # those mean "didn't run", and we must not trust emptiness then.
     let zs = (zsnag)
     let zres = (if ($zs | path exists) { (^$zs --json $fp | complete) } else { null })
-    let ran_zsnag = (($zres != null) and ($zres.exit_code == 0))
+    let ran_zsnag = (($zres != null) and ($zres.exit_code <= 1))
     let findings = (if $ran_zsnag {
         ([$zres.stdout, $zres.stderr] | str join "\n" | lines
             | where {|l| ($l | str trim) | str starts-with "{" }
@@ -223,7 +225,7 @@ def run-hook [] {
     let alines = ($c.ast_errs | each {|e| $"[ast-check] ($fp | path basename):($e.line):($e.col)  ($e.message)" })
     let ctx = ($"zsnag + ast-check flagged issues in ($fp | path basename) — please review and fix:\n\n" +
         (($flines | append $alines) | str join "\n") +
-        "\n\n\(Confirm current std APIs against the zephem map: `zlook <name>`.)")
+        "\n\n\(Confirm current std APIs against the zephem map: `nu ~/projects/zephem/query/zlook.nu <name>`.)")
     {hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: ($ctx | str substring 0..9000)}} | to json
 }
 

@@ -1,11 +1,10 @@
 # lib.nu — shared glue for zcanon's Nushell tools.
-# Ground truth is zephem's complete, self-verified std map. The Zig binaries are
-# dependency-light: zlook searches the map's baked lookup table, zsnag lints edited
-# source. The Nushell tools read the map directly (zmap) + keep the local mistake log
-# (the book, one sqlite file). No live-std fallback (a shallow one would be less
-# accurate than the map), no database server, no embedding models.
+# zcanon is now footgun-linting + the edit hook + the mistake log: zsnag lints edited
+# source, zhook runs it (and ast-check) on every .zig edit and feeds the book, zbook
+# reads the book (one sqlite file). No database server. Std discovery/lookup lives in
+# zephem, which owns the std map and its query layer (zlook/zmap) — see the zephem skill.
 
-# Installed Zig's std dir + version (the source of truth — never snapshot it).
+# Installed Zig's std dir + version (used by the hook to stamp the book; never snapshot it).
 export def zig-env [] {
     let out = (^zig env | str join)
     {
@@ -40,30 +39,4 @@ export def book-query [sql: string] {
     ensure-book
     let out = (^sqlite3 -json (book-db) $sql)
     if ($out | str trim | is-empty) { [] } else { $out | from json }
-}
-
-# ---- zephem map freshness -------------------------------------------------
-# The map is derived from ONE std snapshot; zephem stamps that version in
-# data/std/PINNED (e.g. "zig 0.16.0"). Staleness therefore reduces to a version
-# compare — no hashing or mtimes. Return the pinned version ("0.16.0"), or null
-# if the stamp is missing/absent.
-export def zephem-pinned [dir: string] {
-    let p = ($dir | path join PINNED)
-    if ($p | path exists) { (open --raw $p | str trim | str replace 'zig ' '') } else { null }
-}
-
-# One-line staleness check: pinned map version vs the installed zig. Returns a
-# human warning string when they differ (or the stamp is missing), else "".
-# The map is the SOLE source of truth — there is no live fallback — so on a version
-# mismatch the fix is to REGENERATE zephem, never to trust memory. Callers decide
-# severity: reading WARNS; building the baked lookup table (read later without zephem
-# present) should refuse.
-export def zephem-staleness [dir: string] {
-    let pinned = (zephem-pinned $dir)
-    let live = (try { (zig-env).ver } catch { null })
-    if ($pinned == null) {
-        $"⚠ zephem map at ($dir) has no PINNED stamp — cannot verify it matches your zig; regenerate it with `nu scripts/build_std.nu` in zephem."
-    } else if (($live != null) and ($pinned != $live)) {
-        $"⚠ zephem map is pinned to zig ($pinned) but you're on ($live) — map may be stale; discovered facts could be wrong. Regenerate zephem's map: `nu scripts/build_std.nu` then `nu nu/build_lookup.nu`."
-    } else { "" }
 }

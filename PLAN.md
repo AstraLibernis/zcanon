@@ -14,36 +14,39 @@ right facts and checks in front of it at the right time.
 ```
                          ┌─────────────── the model writes/edits Zig ───────────────┐
                          │                                                            │
-   BEFORE writing        │   the SKILL tells the model to search the MAP:            │
+   BEFORE writing        │   the ZEPHEM skill tells the model to search the MAP:     │
    ──────────────        │     • zlook <keywords>   → discover the current name       │
-                         │     • zlook <name>       → signature + resolved type +     │
+   (companion: zephem)   │     • zlook <name>       → signature + resolved type +     │
                          │                            fields + factory members        │
                          │                                                            │
-   AFTER an edit         │   the HOOK fires automatically:                            │
+   AFTER an edit         │   zcanon's HOOK fires automatically:                       │
    ─────────────         │     • zig ast-check  → syntax/compile errors               │
-                         │     • zsnag          → known LLM footguns                   │
+   (this pack)           │     • zsnag          → known LLM footguns                   │
                          │   findings are injected back into the model's context      │
                          └────────────────────────────────────────────────────────────┘
 
    GROUND TRUTH:  zephem's regenerable std map + the compiler + your tests
 ```
 
-Two moments:
-- **the map** (via `zlook`/`zmap`) is *foresight* — consult before/while writing so the first
-  draft is right. It's the single source of std truth; there is no live-lookup fallback (a
-  shallow one would be less accurate). To refresh it, *regenerate zephem* — it's designed for it.
-- **zhook** (running zsnag + ast-check) is the *safety net* — catches what slipped through,
-  right after the edit, with no need to remember.
+Two moments, now split across two packs:
+- **the map** (via zephem's `zlook`/`zmap`) is *foresight* — consult before/while writing so
+  the first draft is right. It's the single source of std truth; there is no live-lookup
+  fallback (a shallow one would be less accurate). To refresh it, *regenerate zephem*. This
+  half moved to **zephem**, which owns the data and the query layer over it, so a change to
+  the map's contract can no longer break this pack.
+- **zhook** (running zsnag + ast-check) is zcanon's *safety net* — catches what slipped
+  through, right after the edit, with no need to remember.
 
 Ground truth is never the model's memory: the map is compiled+self-verified from the std on
 disk (regenerate when your Zig moves), and the compiler and tests judge correctness.
 
 ## The keystone: the skill
 
-The tools are equipment; `skill/SKILL.md` is what makes the model *reach for them every
+The tools are equipment; `skill/SKILL.md` is what makes the model *reach for the check every
 session, in any project, without being told*. Without it, the tools sit unused (the same
 trap that kills any tool that depends on discipline). The skill is therefore the piece
-that turns "a few scripts on disk" into "install once, better Zig everywhere."
+that turns "a few scripts on disk" into "install once, fewer Zig mistakes everywhere." It
+cross-references the companion **zephem** skill, which owns the std-lookup half.
 
 Install paths for the skill (pick one):
 - copy/symlink `skill/SKILL.md` into `~/.claude/skills/zcanon/SKILL.md` (global), or
@@ -52,15 +55,15 @@ Install paths for the skill (pick one):
 ## Roadmap
 
 **Done**
-- `zlook` (Zig) — SIMD keyword search over zephem's map: signature + resolved type/error-set +
-  doc + fields/tags + factory members + delegation, ranked, structured. The single std lookup.
-  (Replaced `zfact`, the live-std top-level scanner — removed as a half-accurate fallback that
-  undercut the accuracy premise; the map is complete and regenerable, so it stands alone.)
 - `zsnag` (Zig) — 10 verified LLM-mistake rules, tokenizer-based; validated on real third-party code
-- `zmap` (Nushell) — deterministic reader over zephem's complete std map: keyword `find`, `show` a module, `doc` a path (replaced the removed embedding/pgvector search)
 - `zhook` (Nushell) — automatic, reversible PostToolUse checker; **logs every finding to the book**
 - `zbook` (Nushell) — reads the book (`zig_log`): real mistakes ranked by frequency
-- `skill/SKILL.md` — the behavioral instruction
+- `skill/SKILL.md` — the behavioral instruction (footgun + hook half; cross-refs the zephem skill)
+- **The std-lookup half moved to zephem** — `zlook` (SIMD keyword search over the map) and
+  `zmap` (deterministic reader) now live in zephem's `query/` with their own skill, since
+  zephem owns the map's data. This kept a data-contract change from breaking zcanon again.
+  (They earlier replaced `zfact`, a half-accurate live-std scanner, and the removed
+  embedding/pgvector search; the map is complete and regenerable, so it stands alone.)
 
 **The book (why, and why NOT synthetic).** We considered generating flawed Zig — from a
 script, then from a small local model — and mining the failures. Both are dead ends for
