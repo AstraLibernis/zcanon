@@ -220,11 +220,18 @@ def run-hook [] {
 
     if (($c.findings | is-empty) and ($c.ast_errs | is-empty)) { return }
 
-    # feed the findings back to me
-    let flines = ($c.findings | each {|f| $"[($f.rule) ($f.severity)] ($fp | path basename):($f.line):($f.col)  ($f.message)" })
-    let alines = ($c.ast_errs | each {|e| $"[ast-check] ($fp | path basename):($e.line):($e.col)  ($e.message)" })
-    let ctx = ($"zsnag + ast-check flagged issues in ($fp | path basename) — please review and fix:\n\n" +
-        (($flines | append $alines) | str join "\n") +
+    # Feed the findings back to me, GROUPED by priority tier — nothing is hidden, but the
+    # noisy advisory rules are labeled as low-priority so they don't read as alarms.
+    let base = ($fp | path basename)
+    let tagged = ($c.recs | insert tier {|r| finding-tier $r.severity $r.file })
+    let blocks = (tier-meta | each {|t|
+        let rows = ($tagged | where tier == $t.key | sort-by line)
+        if ($rows | is-empty) { null } else {
+            ($t.head + ":\n" + ($rows | each {|r| $"  [($r.rule)] ($base):($r.line):($r.col)  ($r.message)" } | str join "\n"))
+        }
+    } | where {|x| $x != null })
+    let ctx = ($"zsnag + ast-check — findings in ($base), grouped by priority \(nothing hidden; lower tiers are informational\):\n\n" +
+        ($blocks | str join "\n\n") +
         "\n\n\(Confirm current std APIs against the zephem map: `nu ~/projects/zephem/query/zlook.nu <name>`.)")
     {hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: ($ctx | str substring 0..9000)}} | to json
 }
