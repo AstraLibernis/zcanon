@@ -232,7 +232,7 @@ def run-hook [] {
     } | where {|x| $x != null })
     let ctx = ($"zsnag + ast-check — findings in ($base), grouped by priority \(nothing hidden; lower tiers are informational\):\n\n" +
         ($blocks | str join "\n\n") +
-        "\n\n\(Confirm current std APIs against the zephem map: `nu ~/projects/zephem/query/zlook.nu <name>`.)")
+        "\n\n\(Confirm current std APIs against the zephem map with zephem's zlook: `nu query/zlook.nu <name>` from the zephem repo.)")
     {hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: ($ctx | str substring 0..9000)}} | to json
 }
 

@@ -16,12 +16,14 @@ Reach for both when writing Zig:
 
 - **`zephem`** (companion skill) — *before* you write a std call, look the API up in
   zephem's complete, verified std map instead of recalling it from memory
-  (`nu ~/projects/zephem/query/zlook.nu <terms>` / `zmap`). Zig's std churns fast; don't
+  (`nu $ZEPHEM_HOME/query/zlook.nu <terms>` / `zmap`). Zig's std churns fast; don't
   guess signatures.
 - **`zcanon`** (this skill) — *while and after* you write, catch the known traps.
 
-The tool lives at **`~/projects/zcanon`** (`zsnag` is prebuilt under `zig-out/bin/`; the
-Nushell tools run with `nu`). Use full paths so they work from any directory.
+The tools **self-locate** (each Nushell script finds the repo from its own path), so they work
+wherever zcanon is cloned. `zsnag` is prebuilt under `zig-out/bin/`; the Nushell tools run with
+`nu`. The commands below refer to the repo as **`$ZCANON_HOME`** — set it once to your clone
+(e.g. `export ZCANON_HOME=/path/to/zcanon`) so they run verbatim from any directory.
 
 ## After you edit a .zig file
 
@@ -31,8 +33,8 @@ The `zhook` PostToolUse hook runs **automatically** on every `.zig` edit and fee
 
 Read those findings and fix them before moving on. They are also recorded to a local
 log ("the book", `~/.config/zcanon/book.db`); review recurring patterns with
-`nu ~/projects/zcanon/nu/zbook.nu`. If the hook is somehow not active, run the check
-yourself: `~/projects/zcanon/zig-out/bin/zsnag <file>`.
+`nu $ZCANON_HOME/nu/zbook.nu`. If the hook is somehow not active, run the check
+yourself: `$ZCANON_HOME/zig-out/bin/zsnag <file>`.
 
 ## Mistakes to avoid (zsnag checks these)
 
