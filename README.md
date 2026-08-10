@@ -26,46 +26,50 @@ log of what really goes wrong so the frequent mistakes can be surfaced proactive
 
 ## The pieces
 
-The tool that judges Zig source is written **in Zig** (the project dogfoods itself); the glue
-— running it on each edit and keeping the log — is written **in Nushell**. No database
-server: the log is one sqlite file.
+Everything is written **in Zig** (the project dogfoods itself) and built by Zig. Two binaries,
+no runtime dependencies: no `nu`, no `sqlite3`, no database server. The log is one TSV.
 
-| Tool | Lang | Job | Needs |
-|------|------|-----|-------|
-| `zig-out/bin/zsnag` | Zig | Flag the **10 mistakes an LLM makes** (removed APIs, footguns, leaks) | nothing |
-| `nu/zhook.nu` | Nushell | Run `zsnag` + `zig ast-check` on every `.zig` edit, feed findings back to the model, **and log them to the book** | Claude Code (+ sqlite for the book) |
-| `nu/zbook.nu` | Nushell | Read **the book** — the corpus of real mistakes the hook captured live, ranked by frequency | sqlite (one local file) |
-| `skill/SKILL.md` | — | The instruction that makes the model actually *reach for* the check every session | Claude Code |
+| Tool | Job | Needs |
+|------|-----|-------|
+| `zig-out/bin/zsnag` | Flag the **13 mistakes an LLM makes** — 10 footgun/stale-knowledge rules, plus 3 checked against the real std via the companion zephem map | nothing (zephem optional) |
+| `zig-out/bin/zcanon` | The PostToolUse hook (`zsnag` + `zig ast-check` on every `.zig` edit, findings fed back to the model and logged to the book), plus install/uninstall and the book reader | Claude Code |
+| `skill/SKILL.md` | The instruction that makes the model actually *reach for* the check every session | Claude Code |
 
-The **book** (`zig_log`, written by `zhook`, read by `zbook`) is single-user local state in
-**one sqlite file** (`~/.config/zcanon/book.db`, override `$ZCANON_BOOK`) — no server,
-auto-created on first write. It records what the model *actually* gets wrong on real edits,
-judged by the compiler — no synthetic generation.
+The **book** is single-user local state in **one TSV** (`~/.config/zcanon/book.tsv`, override
+`$ZCANON_BOOK`) — auto-created on first write. It records what the model *actually* gets wrong
+on real edits, judged by the compiler — no synthetic generation. Findings are deduped on
+`(file, rule, message, snippet)`, deliberately excluding line/col so a finding survives edits
+that shift it; each save re-scans the whole file, so anything fixed is pruned and `hits` counts
+real recurrences rather than repeated saves.
 
 ## Install
 
 ```sh
 git clone https://codeberg.org/AstraLibernis/zcanon.git
 cd zcanon
-zig build                              # builds zig-out/bin/zsnag
+zig build                    # builds zig-out/bin/{zsnag,zcanon}
+zig build test               # optional: run the unit tests
 
 # 1. the linter works immediately (reads the file you give it):
 zig-out/bin/zsnag yourfile.zig
 
 # 2. the auto-checker hook (reversible — see below):
-nu nu/zhook.nu --install   # adds a PostToolUse hook to ~/.claude/settings.json (backs up first)
+zig-out/bin/zcanon install   # adds a PostToolUse hook to ~/.claude/settings.json (backs up first)
+zig-out/bin/zcanon status    # installed? enabled? zsnag present? book path?
 
-# 3. the book — log real mistakes the hook catches, then read them back:
-#    (no setup: the hook auto-creates ~/.config/zcanon/book.db on first .zig edit)
-nu nu/zbook.nu                         # table of contents, ranked by frequency
+# 3. the book — read back the real mistakes the hook caught:
+zig-out/bin/zcanon book              # table of contents, ranked by frequency
+zig-out/bin/zcanon book recent 20    # newest findings
+zig-out/bin/zcanon book files        # per-file roll-up
+zig-out/bin/zcanon book R004         # detail for one rule
 ```
 
 For **std lookup/discovery**, install the companion [zephem](https://codeberg.org/AstraLibernis/zephem)
-and its skill — that's where `zlook`/`zmap` now live.
+and its skill — that's where the std map lives, queried with `zephem look` / `zephem map`.
 
-The hook is fully reversible: `nu nu/zhook.nu --disable` / `--enable` toggle it with no
-settings change; `--uninstall` removes only our entry and leaves the rest of your settings
-intact.
+The hook is fully reversible: `zcanon disable` / `zcanon enable` toggle it with no settings
+change; `zcanon uninstall` removes only our entry and leaves the rest of your settings intact.
+`zcanon prune` drops findings for files that no longer exist.
 
 ## What it does and does not do
 
@@ -77,22 +81,24 @@ intact.
 
 ## Status
 
-Tools built and tested (`nu nu/test.nu`). Validated on real third-party Zig
+Tools built and tested (`zig build test`). Validated on real third-party Zig
 (zls, zig-clap, http.zig). The keystone that turns the tools into a true "install once,
 fewer Zig mistakes everywhere" pack — the skill in `skill/SKILL.md` — and the longer
-roadmap are in `PLAN.md`.
+roadmap are in `PLAN.md`, which also carries the open **bug ledger**.
 
 ## Layout
 
 ```
-src/      the Zig tool (zsnag.zig) + build.zig
-nu/       the Nushell glue (zhook, zbook, test, lib)
-sql/      schema_zig_log.sql — the sqlite book
-skill/    SKILL.md — the instruction that wires the check into how the model writes Zig
+build.zig       the build (targets: zsnag, zcanon, test)
+src/            the Zig sources — zsnag.zig (linter), zcanon.zig (hook + CLI),
+                and the modules: hook, book, tier, settings, report, vars
+src/test/       tests, out-of-line, one <mod>_test.zig per module
+sql/            schema_zig_log.sql — the book's column set (historical; the book is TSV now)
+skill/          SKILL.md — the instruction that wires the check into how the model writes Zig
 test_fixtures/  smoke + false-positive regression fixtures
-docs/     component notes
-PLAN.md   how the pieces tie together + roadmap
+docs/archive/   notes on removed components (zfact, the pgvector search)
+PLAN.md         how the pieces tie together + roadmap + bug ledger
 ```
 
-Verified against Zig 0.16.0 / Nushell 0.113.1, 2026-07-08. No database server; the book is
-one sqlite file. Std discovery/lookup lives in the companion zephem.
+Verified against Zig 0.16.0, 2026-08-10. Pure Zig: no Nushell, no sqlite3, no database server —
+the book is one TSV. Std discovery/lookup lives in the companion zephem.

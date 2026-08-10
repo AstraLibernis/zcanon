@@ -15,11 +15,11 @@ right facts and checks in front of it at the right time.
                          ┌─────────────── the model writes/edits Zig ───────────────┐
                          │                                                            │
    BEFORE writing        │   the ZEPHEM skill tells the model to search the MAP:     │
-   ──────────────        │     • zlook <keywords>   → discover the current name       │
-   (companion: zephem)   │     • zlook <name>       → signature + resolved type +     │
+   ──────────────        │     • zephem look <terms>  → discover the current name     │
+   (companion: zephem)   │     • zephem map doc <p>   → signature + resolved type +   │
                          │                            fields + factory members        │
                          │                                                            │
-   AFTER an edit         │   zcanon's HOOK fires automatically:                       │
+   AFTER an edit         │   zcanon's HOOK fires (once installed):                   │
    ─────────────         │     • zig ast-check  → syntax/compile errors               │
    (this pack)           │     • zsnag          → known LLM footguns                   │
                          │   findings are injected back into the model's context      │
@@ -29,12 +29,12 @@ right facts and checks in front of it at the right time.
 ```
 
 Two moments, now split across two packs:
-- **the map** (via zephem's `zlook`/`zmap`) is *foresight* — consult before/while writing so
+- **the map** (via `zephem look` / `zephem map`) is *foresight* — consult before/while writing so
   the first draft is right. It's the single source of std truth; there is no live-lookup
   fallback (a shallow one would be less accurate). To refresh it, *regenerate zephem*. This
   half moved to **zephem**, which owns the data and the query layer over it, so a change to
   the map's contract can no longer break this pack.
-- **zhook** (running zsnag + ast-check) is zcanon's *safety net* — catches what slipped
+- **the hook** (running zsnag + ast-check) is zcanon's *safety net* — catches what slipped
   through, right after the edit, with no need to remember.
 
 Ground truth is never the model's memory: the map is compiled+self-verified from the std on
@@ -55,13 +55,17 @@ Install paths for the skill (pick one):
 ## Roadmap
 
 **Done**
-- `zsnag` (Zig) — 10 verified LLM-mistake rules, tokenizer-based; validated on real third-party code
-- `zhook` (Nushell) — automatic, reversible PostToolUse checker; **logs every finding to the book**
-- `zbook` (Nushell) — reads the book (`zig_log`): real mistakes ranked by frequency
+- `zsnag` (Zig) — 13 LLM-mistake rules in a registry (`--list-rules`), tokenizer-based; validated
+  on real third-party code. 10 are self-contained; **R011/R012/R013 read the zephem map**, so
+  their advice (the replacement name, the real signature) is data rather than a literal and
+  cannot go stale. R003's premise is self-checked against the map at startup: if std ever
+  brings `mem.copy` back, the rule disables itself instead of emitting stale advice.
+- `zcanon hook` (Zig) — automatic, reversible PostToolUse checker; **logs every finding to the book**
+- `zcanon book` (Zig) — reads the book: real mistakes ranked by frequency
 - `skill/SKILL.md` — the behavioral instruction (footgun + hook half; cross-refs the zephem skill)
-- **The std-lookup half moved to zephem** — `zlook` (SIMD keyword search over the map) and
-  `zmap` (deterministic reader) now live in zephem's `query/` with their own skill, since
-  zephem owns the map's data. This kept a data-contract change from breaking zcanon again.
+- **The std-lookup half moved to zephem** — `zephem look` (SIMD keyword search over the map) and
+  `zephem map` (deterministic reader) are subcommands of zephem's single binary, with their own
+  skill, since zephem owns the map's data. This kept a data-contract change from breaking zcanon again.
   (They earlier replaced `zfact`, a half-accurate live-std scanner, and the removed
   embedding/pgvector search; the map is complete and regenerable, so it stands alone.)
 
@@ -70,23 +74,68 @@ script, then from a small local model — and mining the failures. Both are dead
 the actual goal: a script only reproduces flaws we wrote into it, and a small model makes
 *its* mistakes ("doesn't understand the language"), not the deployment model's ("this API
 moved since training"). Wrong mistakes → noise. The correct generator already exists: the
-hook, running on real edits by the real model. So `zhook` now records every finding to
-`zig_log` with the offending source line, and `zbook` reads it back. Frequency is the
+hook, running on real edits by the real model. So the hook records every finding to
+the book with the offending source line, and `zcanon book` reads it back. Frequency is the
 signal — no synthesis, judged by the compiler. Honest limit (unchanged): this never makes
 the model reason better; it turns accumulated real findings into better *context* (which
 APIs to surface in the skill, which `zsnag` rules earn their keep).
 
+**What happened on 2026-08-10.** Two silent failures were found and fixed on the same day.
+
+*The hook had never fired.* Written 2026-07-14, but `--install` was never run — `settings.json`
+carried no `hooks` key at all, while `skill/SKILL.md` claimed the hook ran "automatically". Four
+weeks of unchecked Zig edits, with the skill asserting a safety net that did not exist.
+
+*The book had never recorded anything, and could not.* `lib.nu` shelled out to `^sqlite3`; there
+is no `sqlite3` binary on this machine. The failure was silent — findings were reported normally
+while nothing persisted. So the book starts from zero as of today.
+
+Both are closed: the hook is installed and verified firing, the Nushell layer is gone, and the
+book is a TSV (B6/B7/B8 in the ledger). The book still has no accumulated history — item 1 below
+is now about *gathering* data, not about making storage work.
+
 **Next (in rough order of value)**
-1. **Accumulate the book on real work**, then read it: the most frequent rules/APIs become
-   a short cheat-sheet baked into `skill/SKILL.md`, shifting correction from reactive
-   (hook catches me) to proactive (skill warns me first).
+1. **Accumulate the book on real work**, then read it: the most frequent rules/APIs become a
+   short cheat-sheet baked into `skill/SKILL.md`, shifting correction from reactive (hook
+   catches me) to proactive (skill warns me first). Blocked on nothing but time and edits.
 2. **Harden the skill** — tune the wording so the model reliably uses the tools without
    over-calling them. Measure by dogfooding on real Zig tasks.
 3. **Precise `zsnag` (full-AST version)** — `zsnag` already uses the real Zig tokenizer;
    upgrade the heuristic rules (R006/R008) to `std.zig.Ast` (the parse tree) to cut the
-   last text-pattern false positives.
+   text-pattern false positives. This is now the highest-value fix, not a nicety: B1 and B10
+   are both this bug, and between them they fire on most real Zig files.
 4. **Bundle as one installable unit** — a single installer that wires tools + hook + skill
    + book in one step, so "copy home, settle on Claude" is literally one command.
+
+## Bug ledger
+
+Defects, closed explicitly rather than quietly. Opened 2026-08-10.
+
+| # | Status | Where | Defect |
+|---|---|---|---|
+| B1 | OPEN | `zsnag.zig` R008 | **Systematic false positive.** The acquire scan takes `const NAME` and reads forward to the next `;` — for `const T = struct { … }` that span is the *entire struct body*, so it captures any `ArenaAllocator`/`ArrayList` field plus any `.init(` inside, binds the acquisition to the type name, then hunts for a `T.deinit` that will never exist. Fires on most files declaring a type that owns an allocator. Fixed by the R006/R008 AST upgrade (item 3 above). Live example: `src/book.zig`'s `Book`, suppressed with `zsnag:ok`. |
+| B10 | OPEN | `zsnag.zig` R008 | **Second false-positive mode, worse than B1.** The scan treats the `const` keyword *inside a type expression* as a declaration: in `fn init(text: []const u8) !Fixture {` it binds to the following identifier (`u8`), reads forward to the next `;` — swallowing the whole function body — and then hunts for a `u8.deinit`. `[]const u8` appears in nearly every Zig file, so this fires broadly. Same fix as B1 (parse declarations from the AST, not from a keyword scan). Live examples suppressed in `src/test/settings_test.zig`. |
+| B11 | OPEN | `zsnag.zig` + `tier.zig` | R008 is `warn`, so it lands in `caution`, and only `advisory` demotes to `expected`. Test files therefore never get the scratch demotion, and B1/B10 noise shows at full severity in `src/test/*`. Revisit once B1/B10 are fixed — the demotion rule may be fine and the FPs the whole problem. |
+| B2 | **CLOSED** 2026-08-10 | `snag.zig` | `--json` was hand-built with no escaping; a path containing `"` or `\` emitted invalid JSON. **Fixed:** strings go through `std.json.Stringify.value`; regression-tested with a path containing both. |
+| B3 | **CLOSED** 2026-08-10 | `zsnag.zig` | All output, `--json` included, went to **stderr** via `std.debug.print`. **Fixed:** findings go to stdout, diagnostics to stderr. |
+| B4 | **CLOSED** 2026-08-10 | `snag.zig` | Silent truncation at 128 R008 acquisitions / 32 `zsnag:allow` codes per file. **Fixed:** both grow dynamically; regression-tested with 60+ allow codes. |
+| B5 | OPEN | `zsnag.zig` | R006 and R008 each rescan the whole token stream per candidate — O(n²). |
+| B6 | **CLOSED** 2026-08-10 | `hook.zig` / `zcanon.zig` | **Fail-quiet**: `if ($zs | path exists)` skips zsnag silently when the binary is missing, and `zig-out/` is gitignored — a fresh clone checks nothing and says nothing. **Fixed:** the hook now emits an explicit in-band warning naming the missing path, and `zcanon status` flags it. |
+| B7 | **CLOSED** 2026-08-10 | `book.zig` | SQL built by string interpolation through a hand-rolled quote-doubler; `zbook.nu`'s `R0NN` branch skips even that. **Fixed:** no SQL at all — the book is TSV with escaped delimiters, round-trip tested. |
+| B8 | **CLOSED** 2026-08-10 | `hook.zig` | ast-check parse regex `^(?<file>[^:]+):` cannot match a path containing `:`, and drops `note:` lines. **Fixed:** `parseAstCheck` splits on the `: error: ` separator and takes line/col from the right of the path, so colons in paths parse; `note:` lines are kept as advisory. Both regression-tested. |
+| B12 | OPEN | `snag.zig` R013 | **False positive on enum-tag-then-method.** `std.Io.Clock.real.now(io)` resolves as the dotted path `std.Io.Clock.real.now`, which is not a map entry — `real` is an enum *tag* and `now` is a method on the enum. The chain-stops-at-a-call rule does not help because there is no intervening call. Needs the resolver to notice that a prefix (`std.Io.Clock.real`) resolves with kind `tag` and fall back to the parent type's member. Live example suppressed in `src/book.zig`. |
+| B9 | OPEN (upstream) | zephem | Subcommand parsers ignore unknown flags, so `zephem std --help` performs a **full map regeneration** and `zephem depth --help` starts the multi-minute L5 sweep. Never forward flags to a zephem subcommand. |
+
+**Found by dogfooding, already closed.** R012's first implementation counted commas rather
+than parameters, so every wrapped std signature with a trailing comma (`fn sort( a, b, c, d, )`)
+read as one parameter too many — 16 false positives on zcanon's own source in its first run.
+Both the signature parser and the call-site counter now count non-empty segments. R012 fires
+zero times on correct code.
+
+**Found by the same run, real:** 36 genuine deprecations in zcanon's own new Zig —
+`std.mem.indexOf` → `find`, `lastIndexOfScalar` → `findScalarLast`, `indexOfScalarPos` →
+`findScalarPos`, `indexOfScalar` → `findScalar`. All written from stale memory, all caught by
+R011 reading the map, all fixed. This is the integration paying for itself on day one.
 
 **Stretch — give back to Zig**
 The book accumulates data on which mistakes are most common and where the compiler's error
