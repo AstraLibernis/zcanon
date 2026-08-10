@@ -37,6 +37,7 @@ pub const AST_RULE = "ast-check";
 /// because the book is a text file read by both the hook and a human.
 pub const GROUP_AST = "ast";
 pub const GROUP_CORE = "core";
+pub const GROUP_STRUCTURAL = "structural";
 pub const GROUP_MAP = "map";
 
 /// Which group a recorded rule belongs to. `R011`+ are the zephem-backed rules.
@@ -45,6 +46,8 @@ pub fn groupOf(rule: []const u8) []const u8 {
     if (rule.len == 4 and rule[0] == 'R') {
         const n = std.fmt.parseInt(u16, rule[1..], 10) catch return GROUP_CORE;
         if (n >= 11) return GROUP_MAP;
+        // R008 needs a parse tree; it does not run on a file with a syntax error.
+        if (n == 8) return GROUP_STRUCTURAL;
     }
     return GROUP_CORE;
 }

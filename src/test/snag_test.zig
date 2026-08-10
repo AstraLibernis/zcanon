@@ -220,6 +220,47 @@ test "R008 scopes the release to the declaration's own function" {
     try testing.expect(has(try codesParsed(a.allocator(), src), "R008"));
 }
 
+test "a rule the map contradicts emits nothing" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+    const src = "pub fn f(d: []u8, s: []const u8) void { std.mem.copy(u8, d, s); }";
+
+    // Premise holds: the rule fires.
+    var on: std.ArrayList(snag.Finding) = .empty;
+    try snag.scanWithOpts(gpa, "t.zig", src, &on, .{});
+    var fired = false;
+    for (on.items) |f| if (std.mem.eql(u8, f.rule().code, "R003")) {
+        fired = true;
+    };
+    try testing.expect(fired);
+
+    // Premise contradicted: the rule is silent, not merely warned about. Continuing to assert
+    // "this API was removed" after the map says otherwise is the exact staleness the zephem
+    // integration exists to prevent.
+    var off: std.ArrayList(snag.Finding) = .empty;
+    try snag.scanWithOpts(gpa, "t.zig", src, &off, .{ .stale = &.{.r003_mem_copy} });
+    for (off.items) |f| try testing.expect(!std.mem.eql(u8, f.rule().code, "R003"));
+}
+
+test "structural rules report whether they ran" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+
+    var ok = false;
+    var out1: std.ArrayList(snag.Finding) = .empty;
+    try snag.scanWithOpts(gpa, "t.zig", "pub fn f() void {}", &out1, .{ .ran_structural = &ok });
+    try testing.expect(ok);
+
+    // A file with a syntax error cannot be parsed, so R008 never runs — and the caller must be
+    // able to tell that from "R008 found nothing", or the book prunes real findings.
+    var broken = false;
+    var out2: std.ArrayList(snag.Finding) = .empty;
+    try snag.scanWithOpts(gpa, "t.zig", "const x = async foo();", &out2, .{ .ran_structural = &broken });
+    try testing.expect(!broken);
+}
+
 // ---- suppression ----------------------------------------------------------
 
 test "zsnag:ok silences only the finding's own line" {

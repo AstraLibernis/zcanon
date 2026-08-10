@@ -35,8 +35,12 @@ pub const Sev = enum {
 /// Which checker a rule belongs to. The hook prunes the book per group, so a group that did
 /// not run cannot erase its own history — see `book.pruneFile`.
 pub const Group = enum {
-    /// Self-contained rules; run whenever zsnag runs.
+    /// Token-based rules; run whenever zsnag runs.
     core,
+    /// Rules that need a parse tree. A file with a SYNTAX ERROR does not parse, so these are
+    /// skipped — and that is exactly when an LLM's stale-syntax mistakes appear, so their
+    /// silence must be reported rather than read as "nothing found".
+    structural,
     /// Rules that need the zephem map; absent map means they did not run at all.
     map,
 
@@ -114,6 +118,7 @@ pub const rules = std.enums.directEnumArray(Id, Rule, 0, .{
         .msg = "this cast can panic/corrupt if out of range; verify first.",
     },
     .r008_acquire = .{
+        .group = .structural,
         .code = "R008",
         .sev = .warn,
         .msg = "acquired but never released (no matching deinit/close); add a defer. (heuristic)",
@@ -228,6 +233,7 @@ pub const Scanner = struct {
     src: [:0]const u8,
     allow: []const []const u8,
     out: *std.ArrayList(Finding),
+    stale: []const Id = &.{},
 
     fn text(s: Scanner, t: Tk) []const u8 {
         return s.src[t.start..t.end];
@@ -239,6 +245,9 @@ pub const Scanner = struct {
 
     /// `msg` may differ from the rule's default when the advice is derived from the map.
     fn emitMsg(s: Scanner, off: usize, id: Id, msg: []const u8) !void {
+        // A rule the map has contradicted emits nothing at all.
+        for (s.stale) |sid| if (sid == id) return;
+
         const code = ruleOf(id).code;
         for (s.allow) |r| if (eq(r, code)) return;
 
@@ -299,6 +308,14 @@ pub const Opts = struct {
     /// asked for. Measured 3 findings across Zig's own std (550 files) after the
     /// container-kind guard; all 3 are decls genuinely absent from the map.
     check_existence: bool = false,
+    /// Set to true when the structural rules actually ran — i.e. the file parsed. The caller
+    /// needs this to know whether their silence is meaningful.
+    ran_structural: ?*bool = null,
+    /// Rules whose stated premise the map contradicts. They are SUPPRESSED, not merely warned
+    /// about: a rule asserting "this API was removed" must not keep saying so once the map
+    /// shows the API is back. Advice derived from a literal going stale is the failure this
+    /// whole integration exists to prevent.
+    stale: []const Id = &.{},
 };
 
 pub fn scanWithOpts(
@@ -314,7 +331,14 @@ pub fn scanWithOpts(
     defer allow.deinit(gpa);
     try collectAllow(gpa, src, &allow);
 
-    const st: Scanner = .{ .gpa = gpa, .path = path, .src = src, .allow = allow.items, .out = out };
+    const st: Scanner = .{
+        .gpa = gpa,
+        .path = path,
+        .src = src,
+        .allow = allow.items,
+        .out = out,
+        .stale = opts.stale,
+    };
     const t = try lex(gpa, src);
     defer gpa.free(t);
 
@@ -327,7 +351,10 @@ pub fn scanWithOpts(
     // parse are noise stacked on top of a real problem.
     var tree = try std.zig.Ast.parse(gpa, src, .zig);
     defer tree.deinit(gpa);
-    if (tree.errors.len == 0) try scanAcquire(gpa, st, &tree, t);
+    if (tree.errors.len == 0) {
+        try scanAcquire(gpa, st, &tree, t);
+        if (opts.ran_structural) |flag| flag.* = true;
+    }
 
     // Sort ONLY what this call appended. Sorting the caller's whole accumulator interleaved
     // findings from different files by line number, so `zsnag b.zig a.zig` printed a.zig's

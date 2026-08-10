@@ -152,9 +152,29 @@ test "rules map to the group that owns them" {
     try testing.expectEqualStrings(book.GROUP_AST, book.groupOf(book.AST_RULE));
     try testing.expectEqualStrings(book.GROUP_CORE, book.groupOf("R001"));
     try testing.expectEqualStrings(book.GROUP_CORE, book.groupOf("R010"));
+    try testing.expectEqualStrings(book.GROUP_STRUCTURAL, book.groupOf("R008"));
     try testing.expectEqualStrings(book.GROUP_MAP, book.groupOf("R011"));
     try testing.expectEqualStrings(book.GROUP_MAP, book.groupOf("R013"));
     try testing.expectEqualStrings(book.GROUP_CORE, book.groupOf("nonsense"));
+}
+
+test "a syntax error cannot erase the structural rules' history" {
+    const gpa = testing.allocator;
+    var bk: book.Book = .init(gpa);
+    defer bk.deinit();
+    try bk.upsert(&.{
+        rec("a.zig", "R004", "token rule", "s1"),
+        rec("a.zig", "R008", "unreleased acquire", "s2"),
+    });
+
+    // The file stopped parsing, so R008 never ran. Its silence is not "resolved".
+    bk.pruneFile("a.zig", &.{rec("a.zig", "R004", "token rule", "s1")}, &.{book.GROUP_CORE});
+    try testing.expectEqual(@as(usize, 2), bk.recs.items.len);
+    try testing.expectEqualStrings("R008", bk.recs.items[1].rule);
+
+    // With the structural group active, a genuinely fixed R008 does get pruned.
+    bk.pruneFile("a.zig", &.{rec("a.zig", "R004", "token rule", "s1")}, &.{ book.GROUP_CORE, book.GROUP_STRUCTURAL });
+    try testing.expectEqual(@as(usize, 1), bk.recs.items.len);
 }
 
 test "a zephem map failure cannot erase the map rules' history" {

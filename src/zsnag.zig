@@ -36,6 +36,8 @@ pub fn main(init: std.process.Init) !void {
     var check_existence = false;
     var nfiles: usize = 0;
     var bad_read = false;
+    var all_parsed = true;
+    var stale: []const snag.Id = &.{};
     var findings: std.ArrayList(snag.Finding) = .empty;
 
     // Flags are read in a first pass so `zsnag a.zig --json b.zig` formats both files the
@@ -73,8 +75,9 @@ pub fn main(init: std.process.Init) !void {
             map = m;
             if (try zephem.staleness(c, zigVersion(c))) |warn|
                 try stderr(io, "zsnag: {s}\n", .{warn});
-            for (try snag.stalePremises(gpa, &map.?)) |id| {
-                try stderr(io, "zsnag: rule {s} is STALE — the map contradicts its premise: {s}\n", .{
+            stale = try snag.stalePremises(gpa, &map.?);
+            for (stale) |id| {
+                try stderr(io, "zsnag: rule {s} is DISABLED — the map contradicts its premise: {s}\n", .{
                     snag.ruleOf(id).code, snag.ruleOf(id).premise,
                 });
             }
@@ -92,10 +95,16 @@ pub fn main(init: std.process.Init) !void {
             bad_read = true;
             continue;
         };
+        var parsed = false;
         try snag.scanWithOpts(gpa, path, src, &findings, .{
             .map = if (map) |*m| m else null,
             .check_existence = check_existence,
+            .ran_structural = &parsed,
+            .stale = stale,
         });
+        // One unparseable file is enough to make the structural rules' silence meaningless
+        // for this invocation.
+        if (!parsed) all_parsed = false;
     }
 
     if (nfiles == 0) {
@@ -107,6 +116,7 @@ pub fn main(init: std.process.Init) !void {
         // Status first, so a consumer knows which groups ran before it reads any findings.
         var groups: std.ArrayList(snag.Group) = .empty;
         try groups.append(gpa, .core);
+        if (all_parsed) try groups.append(gpa, .structural);
         if (map != null) try groups.append(gpa, .map);
         try snag.renderStatus(out, groups.items);
         try snag.renderJson(out, findings.items);

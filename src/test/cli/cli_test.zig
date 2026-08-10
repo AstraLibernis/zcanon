@@ -172,6 +172,37 @@ test "cli: re-saving an unchanged file counts a recurrence, not a new finding" {
     try testing.expectEqual(@as(usize, 2), rows);
 }
 
+test "cli: a syntax error does not erase the structural rules' history" {
+    var s = try box("hook-syntaxerror");
+    defer s.deinit();
+    // A real leak, recorded while the file parses.
+    const leaky = "const std = @import(\"std\");\npub fn f(gpa: std.mem.Allocator) void {\n    var l = std.ArrayList(u8).init(gpa);\n    _ = l;\n}\n";
+    const f = try s.write("t.zig", leaky);
+    _ = try s.hook(f);
+    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R008") != null);
+
+    // Now the file stops parsing — exactly what an LLM writing stale syntax produces. R008
+    // cannot run, so its silence must NOT be read as "the leak was fixed". The leak is still
+    // right there in the file.
+    _ = try s.write("t.zig", leaky ++ "const x = async foo();\n");
+    _ = try s.hook(f);
+    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R008") != null);
+}
+
+test "cli: the status record reports structural only when the file parses" {
+    var s = try box("status-structural");
+    defer s.deinit();
+    const ok = try s.write("ok.zig", clean_zig);
+    const broken = try s.write("broken.zig", "const x = async foo();\n");
+
+    const a = try s.zsnag(&.{ "--json", "--no-map", ok });
+    try testing.expect(std.mem.find(u8, a.stdout, "\"structural\"") != null);
+
+    const b = try s.zsnag(&.{ "--json", "--no-map", broken });
+    try testing.expect(std.mem.find(u8, b.stdout, "\"structural\"") == null);
+    try testing.expect(std.mem.find(u8, b.stdout, "\"core\"") != null);
+}
+
 test "cli: fixing the problem prunes it from the book" {
     var s = try box("hook-prune-fix");
     defer s.deinit();
@@ -248,10 +279,18 @@ test "cli: zsnag --json emits a status record then valid JSONL" {
     const first = lines.next().?;
     const status = try std.json.parseFromSliceLeaky(std.json.Value, s.gpa(), first, .{});
     try testing.expectEqualStrings("status", status.object.get("zsnag").?.string);
-    // --no-map means the map group did NOT run, and the record must say so.
+    // --no-map means the map group did NOT run, and the record must say so. The file parses,
+    // so the structural group DID run.
     const ran = status.object.get("ran").?.array;
-    try testing.expectEqual(@as(usize, 1), ran.items.len);
-    try testing.expectEqualStrings("core", ran.items[0].string);
+    var saw_core = false;
+    var saw_structural = false;
+    for (ran.items) |g| {
+        if (std.mem.eql(u8, g.string, "core")) saw_core = true;
+        if (std.mem.eql(u8, g.string, "structural")) saw_structural = true;
+        try testing.expect(!std.mem.eql(u8, g.string, "map"));
+    }
+    try testing.expect(saw_core);
+    try testing.expect(saw_structural);
 
     while (lines.next()) |line| {
         if (line.len == 0) continue;

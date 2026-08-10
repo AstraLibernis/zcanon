@@ -13,8 +13,6 @@ pub const TIMEOUT_SECS = 30;
 
 const Value = std.json.Value;
 
-pub const Status = struct { installed: bool, enabled: bool };
-
 /// The command string written into settings.json, marker included.
 pub fn command(gpa: std.mem.Allocator, exe_path: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa, "{s} hook  # {s}", .{ exe_path, MARKER });
