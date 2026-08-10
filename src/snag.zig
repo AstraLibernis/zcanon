@@ -309,6 +309,7 @@ pub fn scanWithOpts(
     opts: Opts,
 ) !void {
     const map = opts.map;
+    const start = out.items.len; // findings already present belong to earlier files
     var allow: std.ArrayList([]const u8) = .empty;
     defer allow.deinit(gpa);
     try collectAllow(gpa, src, &allow);
@@ -328,7 +329,10 @@ pub fn scanWithOpts(
     defer tree.deinit(gpa);
     if (tree.errors.len == 0) try scanAcquire(gpa, st, &tree, t);
 
-    std.mem.sort(Finding, out.items, {}, struct {
+    // Sort ONLY what this call appended. Sorting the caller's whole accumulator interleaved
+    // findings from different files by line number, so `zsnag b.zig a.zig` printed a.zig's
+    // line 2 before b.zig's line 3 — output order stopped matching argument order.
+    std.mem.sort(Finding, out.items[start..], {}, struct {
         fn lt(_: void, a: Finding, b: Finding) bool {
             if (a.line != b.line) return a.line < b.line;
             return a.col < b.col;

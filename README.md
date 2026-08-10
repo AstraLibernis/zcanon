@@ -48,7 +48,8 @@ real recurrences rather than repeated saves.
 git clone https://codeberg.org/AstraLibernis/zcanon.git
 cd zcanon
 zig build                    # builds zig-out/bin/{zsnag,zcanon}
-zig build test               # optional: run the unit tests
+zig build test               # unit tests + the end-to-end CLI tests
+zig build test-cli           # just the CLI tests (drives the real binaries)
 
 # 1. the linter works immediately (reads the file you give it):
 zig-out/bin/zsnag yourfile.zig
@@ -92,7 +93,9 @@ roadmap are in `PLAN.md`, which also carries the open **bug ledger**.
 build.zig       the build (targets: zsnag, zcanon, test)
 src/            the Zig sources — zsnag.zig (linter), zcanon.zig (hook + CLI),
                 and the modules: hook, book, tier, settings, report, vars
-src/test/       tests, out-of-line, one <mod>_test.zig per module
+src/test/       unit tests, out-of-line, one <mod>_test.zig per module
+src/test/cli/   end-to-end tests that spawn the REAL binaries in a sandbox
+                (settings and book redirected via env; HOME deliberately unset)
 sql/            schema_zig_log.sql — the book's column set (historical; the book is TSV now)
 skill/          SKILL.md — the instruction that wires the check into how the model writes Zig
 test_fixtures/  smoke + false-positive regression fixtures
