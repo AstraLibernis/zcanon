@@ -246,6 +246,27 @@ pub fn renderResponse(arena: std.mem.Allocator, context: []const u8) ![]u8 {
     return std.json.Stringify.valueAlloc(arena, std.json.Value{ .object = root }, .{});
 }
 
+/// Collapse findings identical under the BOOK's dedup key — (rule, message, snippet); the
+/// file is the same for every finding in one hook run.
+///
+/// The Nushell original ended `build-recs` with `uniq-by file rule message snippet` and
+/// rendered from that. Without it, a duplicate renders twice AND `Book.upsert` bumps `hits`
+/// twice within a single batch, corrupting a counter documented as "real recurrences, not
+/// repeated saves of a fix".
+pub fn dedup(arena: std.mem.Allocator, src: []const u8, items: []const Finding) ![]Finding {
+    var out: std.ArrayList(Finding) = .empty;
+    for (items) |f| {
+        const snip = snippetFor(src, f.line);
+        const dup = for (out.items) |seen| {
+            if (std.mem.eql(u8, seen.rule, f.rule) and
+                std.mem.eql(u8, seen.message, f.message) and
+                std.mem.eql(u8, snippetFor(src, seen.line), snip)) break true;
+        } else false;
+        if (!dup) try out.append(arena, f);
+    }
+    return out.items;
+}
+
 pub fn sortFindings(items: []Finding) void {
     std.mem.sort(Finding, items, {}, struct {
         fn lt(_: void, a: Finding, b: Finding) bool {

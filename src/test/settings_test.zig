@@ -6,11 +6,11 @@ const Value = std.json.Value;
 
 /// Mirrors `settings.load`: parse leaky into an arena so the parsed tree and everything
 /// `addOurs` grafts onto it share one lifetime.
-const Fixture = struct { // zsnag:ok — R008 B1: const-span swallows the struct body
+const Fixture = struct {
     arena: std.heap.ArenaAllocator,
     value: Value,
 
-    fn init(text: []const u8) !Fixture { // zsnag:ok — R008 B10: `const` in `[]const u8`
+    fn init(text: []const u8) !Fixture {
         var a: std.heap.ArenaAllocator = .init(testing.allocator);
         errdefer a.deinit();
         const v = try std.json.parseFromSliceLeaky(Value, a.allocator(), text, .{});

@@ -94,8 +94,6 @@ pub fn unescape(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
     return out.toOwnedSlice(gpa);
 }
 
-/// `datetime('now')` in sqlite's default format, which the old book used: UTC,
-/// "YYYY-MM-DD HH:MM:SS". Kept identical so an operator reading both formats sees one thing.
 /// Wall-clock seconds since the unix epoch. `std.time.timestamp()` was removed in 0.16 —
 /// the real-time clock now comes through the Io layer.
 pub fn nowSeconds(io: std.Io) i64 {
@@ -103,6 +101,8 @@ pub fn nowSeconds(io: std.Io) i64 {
     return @intCast(@divFloor(ns, std.time.ns_per_s)); // zsnag:ok — seconds always fit i64
 }
 
+/// `datetime('now')` in sqlite's default format, which the old book used: UTC,
+/// "YYYY-MM-DD HH:MM:SS". Kept identical so an operator reading both formats sees one thing.
 pub fn stamp(buf: *[20]u8, epoch_secs: i64) ![]const u8 {
     // A negative stamp is a real runtime input (bad clock), not a broken invariant — so it
     // returns an error rather than tripping an assert.
@@ -123,10 +123,7 @@ pub fn stamp(buf: *[20]u8, epoch_secs: i64) ![]const u8 {
     });
 }
 
-// R008 false positive: the `const Book` span runs to the next `;`, which is deep inside the
-// struct body, so it captures `ArenaAllocator` + `.init(` and then hunts for a `Book.deinit`
-// that will never exist. The arena IS released, by `deinit` below. See the PLAN.md ledger.
-pub const Book = struct { // zsnag:ok
+pub const Book = struct {
     gpa: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     recs: std.ArrayList(Record),

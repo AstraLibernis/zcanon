@@ -96,12 +96,18 @@ test "rule detail reports a miss instead of an empty section" {
     try testing.expect(std.mem.find(u8, miss, "no findings recorded for R999") != null);
 }
 
-test "nowSeconds is a plausible wall-clock value" {
-    // Threaded Io is what the binary uses; any Io works for a clock read.
+test "nowSeconds converts the clock's nanoseconds to seconds" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
-    const secs = book.nowSeconds(threaded.io());
-    // Sometime after 2020-01-01 and before 2100-01-01 — catches a unit mix-up (ns vs s).
-    try testing.expect(secs > 1_577_836_800);
-    try testing.expect(secs < 4_102_444_800);
+    const io = threaded.io();
+
+    // Compare against an independent read of the same clock rather than a plausibility
+    // window: a range check passes against a stub returning any hardcoded constant, so it
+    // would not catch the actual risk here, which is a ns/s unit mix-up in the conversion.
+    const ns_before = std.Io.Clock.real.now(io).nanoseconds;
+    const secs = book.nowSeconds(io);
+    const ns_after = std.Io.Clock.real.now(io).nanoseconds;
+
+    try testing.expect(secs >= @divFloor(ns_before, std.time.ns_per_s));
+    try testing.expect(secs <= @divFloor(ns_after, std.time.ns_per_s));
 }

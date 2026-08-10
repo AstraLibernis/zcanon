@@ -128,14 +128,17 @@ fn runHook(c: vars.Ctx) !void {
         }
     }
 
-    hook.sortFindings(findings.items);
+    // Dedup on the book's key before anything consumes the list, matching the Nushell
+    // original — otherwise a duplicate renders twice and double-counts `hits`.
+    const deduped = try hook.dedup(c.gpa, src, findings.items);
+    hook.sortFindings(deduped);
     const base = std.fs.path.basename(path);
 
     // The book is best-effort. A write failure (or error.NegativeTimestamp from a bad clock)
     // must not propagate: a non-zero exit surfaces as a hook ERROR with no findings, which is
     // the opposite of the always-report invariant above. Say so in-band instead.
     var book_notice: []const u8 = "";
-    recordToBook(c, path, src, findings.items, active.items) catch |e| {
+    recordToBook(c, path, src, deduped, active.items) catch |e| {
         book_notice = std.fmt.allocPrint(
             c.gpa,
             "\n\n⚠ the book was not updated ({s}) — findings above are still valid.",
@@ -143,7 +146,7 @@ fn runHook(c: vars.Ctx) !void {
         ) catch "";
     };
 
-    const body = (try hook.renderContext(c.gpa, base, path, findings.items)) orelse "";
+    const body = (try hook.renderContext(c.gpa, base, path, deduped)) orelse "";
     const ctx = (try hook.compose(c.gpa, body, &.{ notice, book_notice })) orelse return;
 
     var out_buf: [1 << 16]u8 = undefined;

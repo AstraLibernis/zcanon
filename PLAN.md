@@ -113,17 +113,17 @@ Defects, closed explicitly rather than quietly. Opened 2026-08-10.
 
 | # | Status | Where | Defect |
 |---|---|---|---|
-| B1 | OPEN | `zsnag.zig` R008 | **Systematic false positive.** The acquire scan takes `const NAME` and reads forward to the next `;` — for `const T = struct { … }` that span is the *entire struct body*, so it captures any `ArenaAllocator`/`ArrayList` field plus any `.init(` inside, binds the acquisition to the type name, then hunts for a `T.deinit` that will never exist. Fires on most files declaring a type that owns an allocator. Fixed by the R006/R008 AST upgrade (item 3 above). Live example: `src/book.zig`'s `Book`, suppressed with `zsnag:ok`. |
-| B10 | OPEN | `zsnag.zig` R008 | **Second false-positive mode, worse than B1.** The scan treats the `const` keyword *inside a type expression* as a declaration: in `fn init(text: []const u8) !Fixture {` it binds to the following identifier (`u8`), reads forward to the next `;` — swallowing the whole function body — and then hunts for a `u8.deinit`. `[]const u8` appears in nearly every Zig file, so this fires broadly. Same fix as B1 (parse declarations from the AST, not from a keyword scan). Live examples suppressed in `src/test/settings_test.zig`. |
-| B11 | OPEN | `zsnag.zig` + `tier.zig` | R008 is `warn`, so it lands in `caution`, and only `advisory` demotes to `expected`. Test files therefore never get the scratch demotion, and B1/B10 noise shows at full severity in `src/test/*`. Revisit once B1/B10 are fixed — the demotion rule may be fine and the FPs the whole problem. |
+| B1 | **CLOSED** 2026-08-10 | `snag.zig` | R008 read `const NAME` forward to the next `;` — for `const T = struct { … }` the whole struct body — so any type owning an `ArrayList`/`ArenaAllocator` looked like an unreleased acquisition. **Fixed:** declarations come from `std.zig.Ast.fullVarDecl`, and an initializer that is a container declaration is skipped outright. |
+| B10 | **CLOSED** 2026-08-10 | `snag.zig` | The `const` inside `[]const u8` was read as a declaration binding to `u8`, swallowing the function body. **Fixed by the same AST migration**: a parameter type is not a var-decl node, so it is never considered. Proven by DELETING the `zsnag:ok` workarounds from `src/book.zig` and `src/test/settings_test.zig` — the tree lints clean without them. |
+| B11 | OPEN (re-measure) | `snag.zig` + `tier.zig` | R008 is `warn`, so it lands in `caution`, and only `advisory` demotes to `expected`. Test files therefore never get the scratch demotion, and B1/B10 noise shows at full severity in `src/test/*`. Revisit once B1/B10 are fixed — the demotion rule may be fine and the FPs the whole problem. |
 | B2 | **CLOSED** 2026-08-10 | `snag.zig` | `--json` was hand-built with no escaping; a path containing `"` or `\` emitted invalid JSON. **Fixed:** strings go through `std.json.Stringify.value`; regression-tested with a path containing both. |
 | B3 | **CLOSED** 2026-08-10 | `zsnag.zig` | All output, `--json` included, went to **stderr** via `std.debug.print`. **Fixed:** findings go to stdout, diagnostics to stderr. |
 | B4 | **CLOSED** 2026-08-10 | `snag.zig` | Silent truncation at 128 R008 acquisitions / 32 `zsnag:allow` codes per file. **Fixed:** both grow dynamically; regression-tested with 60+ allow codes. |
-| B5 | OPEN | `zsnag.zig` | R006 and R008 each rescan the whole token stream per candidate — O(n²). |
+| B5 | **CLOSED** 2026-08-10 | `snag.zig` | R006/R008 rescanned the whole token stream per candidate. **Fixed:** the release search is scoped to the declaration's own function span, so work is bounded by function size rather than file size. |
 | B6 | **CLOSED** 2026-08-10 | `hook.zig` / `zcanon.zig` | **Fail-quiet**: `if ($zs | path exists)` skips zsnag silently when the binary is missing, and `zig-out/` is gitignored — a fresh clone checks nothing and says nothing. **Fixed:** the hook now emits an explicit in-band warning naming the missing path, and `zcanon status` flags it. |
 | B7 | **CLOSED** 2026-08-10 | `book.zig` | SQL built by string interpolation through a hand-rolled quote-doubler; `zbook.nu`'s `R0NN` branch skips even that. **Fixed:** no SQL at all — the book is TSV with escaped delimiters, round-trip tested. |
 | B8 | **CLOSED** 2026-08-10 | `hook.zig` | ast-check parse regex `^(?<file>[^:]+):` cannot match a path containing `:`, and drops `note:` lines. **Fixed:** `parseAstCheck` splits on the `: error: ` separator and takes line/col from the right of the path, so colons in paths parse; `note:` lines are kept as advisory. Both regression-tested. |
-| B12 | OPEN | `snag.zig` R013 | **False positive on enum-tag-then-method.** `std.Io.Clock.real.now(io)` resolves as the dotted path `std.Io.Clock.real.now`, which is not a map entry — `real` is an enum *tag* and `now` is a method on the enum. The chain-stops-at-a-call rule does not help because there is no intervening call. Needs the resolver to notice that a prefix (`std.Io.Clock.real`) resolves with kind `tag` and fall back to the parent type's member. Live example suppressed in `src/book.zig`. |
+| B12 | **CLOSED** 2026-08-10 | `snag.zig` R013 | Superseded by the wider bug it was an instance of: R013 followed a dotted path through a VALUE with no guard, where R012 explicitly refuses to. 219 firings on Zig's own std, essentially all false. **Fixed:** resolve the longest prefix present in the map and report only when its kind is a container (`ns`/`struct`/`enum`/`union`/`opaque`); a value kind (`const`/`alias`/`tag`/`field`/`fn`) means member access the map cannot follow. Measured **219 → 3**, and those 3 are decls genuinely absent from the map. R013 is now also OPT-IN (`--check-existence`). |
 | B9 | OPEN (upstream) | zephem | Subcommand parsers ignore unknown flags, so `zephem std --help` performs a **full map regeneration** and `zephem depth --help` starts the multi-minute L5 sweep. Never forward flags to a zephem subcommand. |
 
 **Adversarial audit, 2026-08-10.** After R012's first implementation shipped 16 false positives
@@ -155,6 +155,21 @@ R011 reading the map, all fixed. This is the integration paying for itself on da
 | B17 | **CLOSED** 2026-08-10 | `zsnag.zig` / `zcanon.zig` / `book.zig` | **Three "the checker ran" lies silently erased the book.** zsnag exits 0 even when the zephem map fails to load, so the hook believed R011–R013 had run and found nothing → `pruneFile` deleted their entire history for the file (a moved `$ZEPHEM_HOME` wiped a third of the book). Likewise `ran_ast` was set without checking `term`, and exit 1 conflated "error findings" with "file unreadable". **Fixed:** zsnag *reports* which rule groups ran in a machine-readable status record; pruning is scoped per group; exit codes are distinct (0 clean, 1 error findings, 2 usage, 3 unreadable). |
 | B18 | **CLOSED** 2026-08-10 | `settings.zig` | Three ways the user's own settings file was damaged: the empty-scaffolding cleanup ran even when nothing was removed (deleting a pre-existing empty `"PostToolUse": []`); `addOurs` deleted and recreated `PostToolUse`, silently moving it to the END of `hooks`; and `load` aborted outright on a duplicate key (`error.DuplicateField`) or a UTF-8 BOM. **Fixed:** clean up only after an actual removal, filter in place, strip the BOM, `duplicate_field_behavior = .use_last`. |
 | B19 | **CLOSED** 2026-08-10 | `zcanon.zig` | `try recordToBook(...)` was the only unswallowed error in `runHook`, so a book-write failure (or `error.NegativeTimestamp`) exited non-zero with zero findings — the opposite of the documented always-report invariant. **Fixed:** book failures degrade to an in-band notice. |
+
+### Measured false-positive rates on Zig's own std (550 files)
+
+Recorded rather than asserted, before and after the P0/P1 pass. Any regression here is a failed
+fix. R012's single hit is a TRUE positive and must survive.
+
+| Rule | Before | After |
+|---|---|---|
+| R001 async/await | 13 (8 on `Io.zig` alone), all error-severity | **0** |
+| R008 acquire/release | 41 | **10** |
+| R012 arity | 1 (true positive) | **1** (same true positive) |
+| R013 unknown std path | 219 | **3**, and now opt-in |
+
+R008's remaining 10 were not individually triaged; the categories fixed were type definitions
+(B1), `[]const u8` (B10), file-global name matching, and ownership transfer via `return`.
 
 **Stretch — give back to Zig**
 The book accumulates data on which mistakes are most common and where the compiler's error

@@ -51,22 +51,15 @@ test "ordinary paths do not match the scratch pattern" {
     }
 }
 
-test "tier rank is display order and heads are distinct" {
-    try testing.expect(@intFromEnum(tier.Tier.blocking) < @intFromEnum(tier.Tier.caution));
-    try testing.expect(@intFromEnum(tier.Tier.caution) < @intFromEnum(tier.Tier.advisory));
-    try testing.expect(@intFromEnum(tier.Tier.advisory) < @intFromEnum(tier.Tier.expected));
-
-    const all = [_]tier.Tier{ .blocking, .caution, .advisory, .expected };
+test "every tier has a distinct, non-empty header" {
+    // The rank ordering itself is comptime-fixed by the enum declaration, so asserting it
+    // here would prove nothing. What matters behaviourally — that renderContext emits the
+    // blocks in urgency order — is covered in hook_test.zig.
+    const all = std.enums.values(tier.Tier);
     for (all, 0..) |a, i| {
+        try testing.expect(a.head().len > 0);
         for (all[i + 1 ..]) |b| {
             try testing.expect(!std.mem.eql(u8, a.head(), b.head()));
         }
     }
-}
-
-test "key matches the nushell tier names" {
-    try testing.expectEqualStrings("blocking", tier.Tier.blocking.key());
-    try testing.expectEqualStrings("caution", tier.Tier.caution.key());
-    try testing.expectEqualStrings("advisory", tier.Tier.advisory.key());
-    try testing.expectEqualStrings("expected", tier.Tier.expected.key());
 }

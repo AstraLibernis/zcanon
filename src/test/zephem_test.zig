@@ -33,6 +33,18 @@ test "arity ignores commas nested inside parameter types" {
     try testing.expectEqual(@as(?usize, 4), zephem.arityOf(sig2));
 }
 
+test "arity ignores commas inside an inline doc comment" {
+    // Verbatim from the map: zephem stores `///` text INLINE in the signature, and this one's
+    // prose contains "If these functions are avoided, then ...". Counting through it reported
+    // three parameters for a two-parameter function. 65 std signatures carry this shape.
+    const sig =
+        "fn init( /// Must be threadsafe. Only used for the following functions: " ++
+        "/// * `Io.VTable.async` /// * `Io.VTable.concurrent` /// * `Io.VTable.groupAsync` " ++
+        "/// * `Io.VTable.groupConcurrent` /// If these functions are avoided, then " ++
+        "`Allocator.failing` may be passed /// here. gpa: Allocator, options: InitOptions, ) Threaded";
+    try testing.expectEqual(@as(?usize, 2), zephem.arityOf(sig));
+}
+
 test "arity is null for a non-signature or an unbalanced one" {
     try testing.expectEqual(@as(?usize, null), zephem.arityOf(""));
     try testing.expectEqual(@as(?usize, null), zephem.arityOf("const x = 1"));

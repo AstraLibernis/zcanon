@@ -278,6 +278,36 @@ test "response uses the nested hookSpecificOutput form" {
     try testing.expect(parsed.value.object.get("additionalContext") == null);
 }
 
+test "identical findings on identical source lines collapse to one" {
+    var a = arena();
+    defer a.deinit();
+    // Two lines with the same trimmed text, same rule, same message — one finding in the
+    // book's terms. Rendering both, and counting `hits` twice for them, was the divergence
+    // from the Nushell original.
+    const src = "x();\ny();\nx();\n";
+    const items = [_]hook.Finding{
+        .{ .rule = "R010", .severity = "info", .line = 1, .col = 1, .message = "m" },
+        .{ .rule = "R010", .severity = "info", .line = 3, .col = 1, .message = "m" },
+    };
+    const out = try hook.dedup(a.allocator(), src, &items);
+    try testing.expectEqual(@as(usize, 1), out.len);
+    try testing.expectEqual(@as(u32, 1), out[0].line);
+}
+
+test "dedup keeps findings that differ in rule, message or source line" {
+    var a = arena();
+    defer a.deinit();
+    const src = "x();\ny();\n";
+    const items = [_]hook.Finding{
+        .{ .rule = "R010", .severity = "info", .line = 1, .col = 1, .message = "m" },
+        .{ .rule = "R004", .severity = "warn", .line = 1, .col = 1, .message = "m" }, // rule differs
+        .{ .rule = "R010", .severity = "info", .line = 1, .col = 1, .message = "other" }, // message differs
+        .{ .rule = "R010", .severity = "info", .line = 2, .col = 1, .message = "m" }, // snippet differs
+    };
+    const out = try hook.dedup(a.allocator(), src, &items);
+    try testing.expectEqual(@as(usize, 4), out.len);
+}
+
 test "findings sort by line then column" {
     var items = [_]hook.Finding{
         .{ .rule = "a", .severity = "warn", .line = 20, .col = 5, .message = "m" },

@@ -19,6 +19,19 @@ fn has(list: []const []const u8, code: []const u8) bool {
     return false;
 }
 
+/// Like `codes`, but REQUIRES the source to parse.
+///
+/// The AST-backed rules (R008) are skipped entirely on a file with syntax errors, so a test
+/// fragment that does not parse makes every "must not fire" assertion pass vacuously — the
+/// rule never ran. That is how `var l = …init(gpa); defer l.deinit();` silently became a
+/// no-op test: `defer` is not legal at file scope. Any AST-rule test must go through here.
+fn codesParsed(gpa: std.mem.Allocator, src: [:0]const u8) ![]const []const u8 {
+    var tree = try std.zig.Ast.parse(gpa, src, .zig);
+    defer tree.deinit(gpa);
+    if (tree.errors.len > 0) return error.TestSourceDoesNotParse;
+    return codes(gpa, src);
+}
+
 // ---- the registry ---------------------------------------------------------
 
 test "every rule has a unique code, a severity and a message" {
@@ -31,8 +44,18 @@ test "every rule has a unique code, a severity and a message" {
         try testing.expect(!has(seen.items, r.code));
         try seen.append(testing.allocator, r.code);
     }
-    // 10 built-in rules + 3 map-backed (R011 deprecated, R012 arity, R013 unknown).
-    try testing.expectEqual(@as(usize, 13), snag.rules.len);
+    // Structural, not a magic count: the table must cover the Id enum exactly, and codes
+    // must be in declaration order so R0NN matches its position. A bare `rules.len == 13`
+    // asserts nothing about behaviour and needs editing every time a rule is added.
+    const ids = std.enums.values(snag.Id);
+    try testing.expectEqual(ids.len, snag.rules.len);
+    for (ids, 1..) |id, n| {
+        var buf: [8]u8 = undefined;
+        try testing.expectEqualStrings(
+            try std.fmt.bufPrint(&buf, "R{d:0>3}", .{n}),
+            snag.ruleOf(id).code,
+        );
+    }
 }
 
 test "the enum and the table agree" {
@@ -90,15 +113,111 @@ test "R007 does not fire on a cast used directly as an index" {
 test "R008 is satisfied by a matching deinit or close" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    const leaked = "var l = std.ArrayList(u8).init(gpa);\n";
-    const released = "var l = std.ArrayList(u8).init(gpa);\ndefer l.deinit();\n";
-    try testing.expect(has(try codes(a.allocator(), leaked), "R008"));
-    try testing.expect(!has(try codes(a.allocator(), released), "R008"));
+    const leaked =
+        \\fn f(gpa: Allocator) void {
+        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    _ = l;
+        \\}
+    ;
+    const released =
+        \\fn f(gpa: Allocator) void {
+        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    defer l.deinit();
+        \\    _ = l;
+        \\}
+    ;
+    try testing.expect(has(try codesParsed(a.allocator(), leaked), "R008"));
+    try testing.expect(!has(try codesParsed(a.allocator(), released), "R008"));
 
-    const f_leaked = "const f = try dir.openFile(p, .{});\n";
-    const f_closed = "const f = try dir.openFile(p, .{});\ndefer f.close();\n";
-    try testing.expect(has(try codes(a.allocator(), f_leaked), "R008"));
-    try testing.expect(!has(try codes(a.allocator(), f_closed), "R008"));
+    const f_leaked =
+        \\fn g(dir: Dir, p: []const u8) !void {
+        \\    const fd = try dir.openFile(p, .{});
+        \\    _ = fd;
+        \\}
+    ;
+    const f_closed =
+        \\fn g(dir: Dir, p: []const u8) !void {
+        \\    const fd = try dir.openFile(p, .{});
+        \\    defer fd.close();
+        \\    _ = fd;
+        \\}
+    ;
+    try testing.expect(has(try codesParsed(a.allocator(), f_leaked), "R008"));
+    try testing.expect(!has(try codesParsed(a.allocator(), f_closed), "R008"));
+}
+
+test "R008 does not fire on a type definition that owns an allocator" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    // The old scan read `const Book` forward to the next `;` — the whole struct body — saw
+    // ArenaAllocator plus `.init(`, and hunted for a `Book.deinit` that will never exist.
+    const src =
+        \\const Book = struct {
+        \\    arena: std.heap.ArenaAllocator,
+        \\    pub fn init(gpa: Allocator) Book {
+        \\        return .{ .arena = .init(gpa) };
+        \\    }
+        \\    pub fn deinit(b: *Book) void {
+        \\        b.arena.deinit();
+        \\    }
+        \\};
+    ;
+    try testing.expect(!has(try codesParsed(a.allocator(), src), "R008"));
+}
+
+test "R008 does not read `const` inside a type expression as a declaration" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    // `[]const u8` bound to `u8` and swallowed the function body. It appears in nearly every
+    // Zig file, so this fired almost everywhere.
+    const src =
+        \\fn takesSlice(s: []const u8, gpa: Allocator) usize {
+        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    defer l.deinit();
+        \\    return s.len + l.items.len;
+        \\}
+    ;
+    try testing.expect(!has(try codesParsed(a.allocator(), src), "R008"));
+}
+
+test "R008 does not fire when the resource is returned to the caller" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    // Ownership transfers; releasing it here would be the bug. Shape taken from
+    // std's tar.zig createDirAndFile, which the file-scoped check flagged.
+    const direct =
+        \\fn open(dir: Dir, p: []const u8) !File {
+        \\    const fd = try dir.openFile(p, .{});
+        \\    return fd;
+        \\}
+    ;
+    const wrapped =
+        \\fn make(gpa: Allocator) !Holder {
+        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    return .{ .list = l };
+        \\}
+    ;
+    try testing.expect(!has(try codesParsed(a.allocator(), direct), "R008"));
+    try testing.expect(!has(try codesParsed(a.allocator(), wrapped), "R008"));
+}
+
+test "R008 scopes the release to the declaration's own function" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    // A file-global name search reported NOTHING here — a rule claiming clean code over a
+    // real leak, because some *other* function released a variable of the same name.
+    const src =
+        \\fn released(gpa: Allocator) void {
+        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    defer l.deinit();
+        \\    _ = l;
+        \\}
+        \\fn leaked(gpa: Allocator) void {
+        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    _ = l;
+        \\}
+    ;
+    try testing.expect(has(try codesParsed(a.allocator(), src), "R008"));
 }
 
 // ---- suppression ----------------------------------------------------------
@@ -151,10 +270,12 @@ test "findings come out sorted by position" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const src =
-        \\var l = std.ArrayList(u8).init(gpa);
-        \\std.debug.print("x", .{});
-        \\const y = foo() catch unreachable;
-        \\
+        \\fn f(gpa: Allocator) void {
+        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    std.debug.print("x", .{});
+        \\    const y = foo() catch unreachable;
+        \\    _ = .{ l, y };
+        \\}
     ;
     var out: std.ArrayList(snag.Finding) = .empty;
     try scan(a.allocator(), src, &out);

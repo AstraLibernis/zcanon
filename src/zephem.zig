@@ -172,6 +172,32 @@ pub fn deprecationOf(doc: []const u8) ?[]const u8 {
     return if (name.len == 0) null else name;
 }
 
+/// Kinds that can legitimately have members addressed by a further `.name`.
+/// Everything else (`const`, `alias`, `tag`, `field`, `fn`) denotes a VALUE, and following a
+/// dotted path through a value needs type inference the map cannot give us.
+pub fn isContainerKind(kind: []const u8) bool {
+    const containers = [_][]const u8{ "ns", "struct", "enum", "union", "opaque" };
+    for (containers) |c| if (std.mem.eql(u8, kind, c)) return true;
+    return false;
+}
+
+/// Walk back to the longest proper prefix of `path` that IS in the map, and return its kind.
+/// Null when no prefix resolves at all.
+///
+/// This is what separates "you invented a std function" from "you addressed a member of a
+/// value". `std.mem.copyForwards2` → longest prefix `std.mem` is `ns`, so the missing member
+/// is genuinely suspicious. `std.Io.Clock.real.now` → longest prefix `std.Io.Clock.real` is a
+/// `tag`, so `.now` is a method on the value's type and the map simply cannot follow it.
+/// Without this distinction R013 fired 219 times on Zig's own std, essentially all wrong.
+pub fn longestPrefixKind(m: Map, path: []const u8) ?[]const u8 {
+    var end = path.len;
+    while (std.mem.findScalarLast(u8, path[0..end], '.')) |dot| {
+        if (m.get(path[0..dot])) |e| return e.kind;
+        end = dot;
+    }
+    return null;
+}
+
 pub fn isDeprecated(doc: []const u8) bool {
     return doc.len >= 10 and std.ascii.startsWithIgnoreCase(doc, "deprecated");
 }
@@ -188,7 +214,27 @@ pub fn arityOf(sig: []const u8) ?usize {
     var depth: usize = 0;
     var params: usize = 0;
     var seen: bool = false; // content in the current segment
-    for (sig[open..]) |ch| {
+    var in_doc = false; // inside an inline `///` comment
+    var i: usize = open;
+    while (i < sig.len) : (i += 1) {
+        const ch = sig[i];
+
+        // zephem stores `///` doc text INLINE in the signature, and that prose contains
+        // commas: `fn init( /// … If these functions are avoided, then `Allocator.failing`
+        // may be passed … gpa: Allocator, options: InitOptions, )` is TWO parameters. Counting
+        // through the prose reported three. 65 std signatures carry a comma inside doc text.
+        if (!in_doc and ch == '/' and i + 2 < sig.len and sig[i + 1] == '/' and sig[i + 2] == '/') {
+            in_doc = true;
+            i += 2;
+            continue;
+        }
+        if (in_doc) {
+            // The doc run ends at the next `///` or at the parameter that follows it. A
+            // parameter is `name: Type`, so a `:` at depth 1 closes the prose.
+            if (ch == ':' and depth == 1) in_doc = false;
+            if (ch == ')' and depth == 1) in_doc = false else continue;
+        }
+
         switch (ch) {
             '(', '[', '{' => {
                 depth += 1;

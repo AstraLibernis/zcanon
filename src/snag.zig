@@ -289,6 +289,26 @@ pub fn scanWithMap(
     out: *std.ArrayList(Finding),
     map: ?*const zephem.Map,
 ) !void {
+    return scanWithOpts(gpa, path, src, out, .{ .map = map });
+}
+
+pub const Opts = struct {
+    map: ?*const zephem.Map = null,
+    /// R013 (a std path with no map entry) is OPT-IN. Its usefulness depends on the map being
+    /// complete, and a gap in the map reads as a defect in your code — so it is off unless
+    /// asked for. Measured 3 findings across Zig's own std (550 files) after the
+    /// container-kind guard; all 3 are decls genuinely absent from the map.
+    check_existence: bool = false,
+};
+
+pub fn scanWithOpts(
+    gpa: std.mem.Allocator,
+    path: []const u8,
+    src: [:0]const u8,
+    out: *std.ArrayList(Finding),
+    opts: Opts,
+) !void {
+    const map = opts.map;
     var allow: std.ArrayList([]const u8) = .empty;
     defer allow.deinit(gpa);
     try collectAllow(gpa, src, &allow);
@@ -298,9 +318,15 @@ pub fn scanWithMap(
     defer gpa.free(t);
 
     try scanTokens(st, t);
-    try scanAcquire(gpa, st, t);
     try scanStreamZero(st, t);
-    if (map) |m| try scanStdPaths(gpa, st, t, m);
+    if (map) |m| try scanStdPaths(gpa, st, t, m, opts.check_existence);
+
+    // The structural rules need a parse tree. If the file does not parse, skip them: the
+    // compiler's own ast-check will report the syntax error, and heuristics run over a broken
+    // parse are noise stacked on top of a real problem.
+    var tree = try std.zig.Ast.parse(gpa, src, .zig);
+    defer tree.deinit(gpa);
+    if (tree.errors.len == 0) try scanAcquire(gpa, st, &tree, t);
 
     std.mem.sort(Finding, out.items, {}, struct {
         fn lt(_: void, a: Finding, b: Finding) bool {
@@ -368,27 +394,109 @@ fn scanTokens(st: Scanner, t: []const Tk) !void {
     }
 }
 
-const Acq = struct { name: []const u8, close: bool, off: usize };
+const Acq = struct { name: []const u8, close: bool, off: usize, tok: u32 };
+
+const Span = struct { first: u32, last: u32 };
+
+/// True for an initializer that DEFINES A TYPE rather than acquiring a resource.
+/// `const Book = struct { arena: ArenaAllocator, ... }` is a declaration, not an acquisition —
+/// treating it as one is what made R008 fire on most files that declare an allocator-owning
+/// type, then hunt for a `Book.deinit` that will never exist.
+fn isTypeDefinition(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool {
+    return switch (tree.nodeTag(node)) {
+        .container_decl,
+        .container_decl_trailing,
+        .container_decl_two,
+        .container_decl_two_trailing,
+        .container_decl_arg,
+        .container_decl_arg_trailing,
+        .tagged_union,
+        .tagged_union_trailing,
+        .tagged_union_two,
+        .tagged_union_two_trailing,
+        .tagged_union_enum_tag,
+        .tagged_union_enum_tag_trailing,
+        .error_set_decl,
+        => true,
+        else => false,
+    };
+}
+
+/// Token span of every function body, so a release can be matched within the declaration's own
+/// function instead of anywhere in the file. Matching file-wide meant two functions each
+/// declaring `var l = ...init(gpa)`, with only one `defer l.deinit()`, reported NOTHING —
+/// a rule claiming clean code over a real leak. The names that repeat (`l`, `list`, `arena`,
+/// `buf`) are exactly the common ones.
+fn fnSpans(gpa: std.mem.Allocator, tree: *const std.zig.Ast) ![]Span {
+    var spans: std.ArrayList(Span) = .empty;
+    for (0..tree.nodes.len) |i| {
+        const node: std.zig.Ast.Node.Index = @enumFromInt(i);
+        if (tree.nodeTag(node) != .fn_decl) continue;
+        try spans.append(gpa, .{ .first = tree.firstToken(node), .last = tree.lastToken(node) });
+    }
+    return spans.toOwnedSlice(gpa);
+}
+
+/// True when the identifier at `k` is part of a `return` expression — the value is handed to
+/// the caller, so this function is not the one responsible for releasing it.
+///
+/// Scans back over the expression to the statement start: `return f;`, `return .{ .x = f };`
+/// and `return try wrap(f);` all count. Stops at a statement boundary so an unrelated earlier
+/// `return` cannot match.
+fn isReturned(t: []const Tk, span: Span, k: usize) bool {
+    var i = k;
+    while (i > span.first) : (i -= 1) {
+        switch (t[i - 1].tag) {
+            .keyword_return => return true,
+            // `.{` opens an anonymous struct literal, so `return .{ .list = l }` is still one
+            // return expression. Only a bare `{` is a real statement boundary.
+            .l_brace => if (i >= 2 and t[i - 2].tag == .period) continue else return false,
+            .semicolon, .r_brace => return false,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// The tightest function span containing `tok`, or null for file-level declarations.
+fn enclosing(spans: []const Span, tok: u32) ?Span {
+    var best: ?Span = null;
+    for (spans) |s| {
+        if (tok < s.first or tok > s.last) continue;
+        if (best == null or (s.last - s.first) < (best.?.last - best.?.first)) best = s;
+    }
+    return best;
+}
 
 /// R008: acquire (init of a deinit-having type, or openFile/createFile) without release.
 ///
 /// Grows dynamically — the old fixed 128-entry cap dropped acquisitions silently (ledger B4).
 /// Still heuristic; the declaration scan is the source of ledger B1 and B10 and wants an AST.
-fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, t: []const Tk) !void {
+fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t: []const Tk) !void {
     var acq: std.ArrayList(Acq) = .empty;
     defer acq.deinit(gpa);
 
-    var i: usize = 0;
-    while (i < t.len) : (i += 1) {
-        if (t[i].tag != .keyword_var and t[i].tag != .keyword_const) continue;
-        if (i + 1 >= t.len or t[i + 1].tag != .identifier) continue;
-        const vname = st.text(t[i + 1]);
-        const voff = t[i + 1].start;
+    // Declarations come from the AST, not from scanning for the `const`/`var` KEYWORD and
+    // reading to the next `;`. That scan had two failure modes, both systemic: for
+    // `const T = struct { … }` the span was the whole struct body, and in `fn f(s: []const u8)`
+    // the `const` inside the type bound to `u8` and swallowed the function body.
+    for (0..tree.nodes.len) |i| {
+        const node: std.zig.Ast.Node.Index = @enumFromInt(i);
+        const decl = tree.fullVarDecl(node) orelse continue;
+        const init_node = decl.ast.init_node.unwrap() orelse continue;
+        if (isTypeDefinition(tree, init_node)) continue;
+
+        const name_tok = decl.ast.mut_token + 1;
+        if (name_tok >= t.len) continue;
+
+        // Scan the INITIALIZER's own tokens — nothing before or after it.
+        const first = tree.firstToken(init_node);
+        const last = tree.lastToken(init_node);
         var saw_init = false;
         var saw_type = false;
         var close = false;
-        var j = i + 2;
-        while (j < t.len and t[j].tag != .semicolon) : (j += 1) {
+        var j: usize = first;
+        while (j <= last and j < t.len) : (j += 1) {
             if (t[j].tag != .identifier) continue;
             const wj = st.text(t[j]);
             if (wj.len >= 4 and std.mem.startsWith(u8, wj, "init") and
@@ -401,15 +509,36 @@ fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, t: []const Tk) !void {
                 saw_type = true;
             };
         }
-        if (saw_init and (saw_type or close))
-            try acq.append(gpa, .{ .name = vname, .close = close, .off = voff });
+        if (saw_init and (saw_type or close)) try acq.append(gpa, .{
+            .name = st.text(t[name_tok]),
+            .close = close,
+            .off = t[name_tok].start,
+            .tok = name_tok,
+        });
     }
+    if (acq.items.len == 0) return;
 
+    const spans = try fnSpans(gpa, tree);
+    defer gpa.free(spans);
+
+    // One pass per function that actually holds an acquisition, building the set of names
+    // released in it — rather than rescanning the whole token stream per acquisition, which
+    // was the O(n²) half of the old implementation.
     for (acq.items) |a| {
+        const span = enclosing(spans, a.tok) orelse Span{ .first = 0, .last = @intCast(t.len - 1) };
         var released = false;
-        var k: usize = 0;
-        while (k + 2 < t.len) : (k += 1) {
+        var k: usize = span.first;
+        while (k <= span.last and k < t.len) : (k += 1) {
             if (t[k].tag != .identifier or !eq(st.text(t[k]), a.name)) continue;
+
+            // Returned to the caller: ownership transfers, and releasing it here would be the
+            // bug. `fn createDirAndFile(...) !File { const f = try dir.createFile(...); return f; }`
+            // is correct code, and treating it as a leak is a false positive.
+            if (isReturned(t, span, k)) {
+                released = true;
+                break;
+            }
+            if (k + 2 > span.last or k + 2 >= t.len) continue;
             if (t[k + 1].tag != .period or t[k + 2].tag != .identifier) continue;
             const m = st.text(t[k + 2]);
             if ((!a.close and eq(m, "deinit")) or (a.close and eq(m, "close"))) {
@@ -459,7 +588,7 @@ fn scanStreamZero(st: Scanner, t: []const Tk) !void {
 /// `.readFileAlloc` continuation is skipped — its receiver is a *value*, so its first
 /// parameter is implicit and its arity cannot be compared against the map's signature.
 /// Guessing there would produce false positives on ordinary method-call style.
-fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const zephem.Map) !void {
+fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const zephem.Map, check_existence: bool) !void {
     var i: usize = 0;
     while (i < t.len) : (i += 1) {
         if (t[i].tag != .identifier or !eq(st.text(t[i]), "std")) continue;
@@ -483,12 +612,20 @@ fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const 
 
         const entry = map.get(buf.items);
         if (entry == null) {
-            const msg = try std.fmt.allocPrint(
-                gpa,
-                "`{s}` is not in the zephem map — cannot verify it exists (check with `zephem look`).",
-                .{buf.items},
-            );
-            try st.emitMsg(t[i].start, .r013_unknown_std, msg);
+            // Only a MISSING MEMBER OF A CONTAINER is suspicious. If the longest resolving
+            // prefix is a value (`const`, `alias`, `tag`, `field`, `fn`), the rest of the path
+            // is member access through that value's type, which the map cannot follow —
+            // `std.Io.Clock.real.now`, `std.testing.allocator.free`. Reporting those is what
+            // made R013 fire 219 times on Zig's own std.
+            const prefix_kind = zephem.longestPrefixKind(map.*, buf.items);
+            if (check_existence and prefix_kind != null and zephem.isContainerKind(prefix_kind.?)) {
+                const msg = try std.fmt.allocPrint(
+                    gpa,
+                    "`{s}` is not in the zephem map — cannot verify it exists (check with `zephem look`).",
+                    .{buf.items},
+                );
+                try st.emitMsg(t[i].start, .r013_unknown_std, msg);
+            }
             i = j;
             continue;
         }

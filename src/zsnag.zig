@@ -14,11 +14,12 @@ const zephem = @import("zephem.zig");
 const vars = @import("vars.zig");
 
 const usage =
-    \\usage: zsnag [--json] [--no-map] [--list-rules] file.zig ...
+    \\usage: zsnag [--json] [--no-map] [--check-existence] [--list-rules] file.zig ...
     \\
-    \\  --json        one JSON object per finding (JSONL)
-    \\  --no-map      skip the zephem-backed rules (R011 deprecated, R012 arity, R013 unknown)
-    \\  --list-rules  print the rule registry
+    \\  --json            one JSON object per finding (JSONL)
+    \\  --no-map          skip the zephem-backed rules (R011 deprecated, R012 arity)
+    \\  --check-existence enable R013: flag a std path with no map entry (opt-in)
+    \\  --list-rules      print the rule registry
     \\
 ;
 
@@ -32,6 +33,7 @@ pub fn main(init: std.process.Init) !void {
 
     var json = false;
     var no_map = false;
+    var check_existence = false;
     var nfiles: usize = 0;
     var bad_read = false;
     var findings: std.ArrayList(snag.Finding) = .empty;
@@ -46,6 +48,8 @@ pub fn main(init: std.process.Init) !void {
             json = true;
         } else if (std.mem.eql(u8, a, "--no-map")) {
             no_map = true;
+        } else if (std.mem.eql(u8, a, "--check-existence")) {
+            check_existence = true;
         } else if (std.mem.eql(u8, a, "--list-rules")) {
             try snag.listRules(out);
             try out.flush();
@@ -88,7 +92,10 @@ pub fn main(init: std.process.Init) !void {
             bad_read = true;
             continue;
         };
-        try snag.scanWithMap(gpa, path, src, &findings, if (map) |*m| m else null);
+        try snag.scanWithOpts(gpa, path, src, &findings, .{
+            .map = if (map) |*m| m else null,
+            .check_existence = check_existence,
+        });
     }
 
     if (nfiles == 0) {
