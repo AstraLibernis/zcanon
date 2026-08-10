@@ -184,6 +184,7 @@ Recorded so they are not rediscovered from scratch. None of these block anything
 | D1 | **10 R008 and 7 R006 warnings on Zig's std, never individually triaged.** R008 is down from 41; the four fixed categories were type definitions, `[]const u8`, file-global name matching, and ownership transfer via `return`. R006 was never measured before this audit. | Unknown mix of real findings and remaining heuristic noise. Both are `(heuristic)`-labelled rules. Worth a look only if either starts feeling untrustworthy in daily use. |
 | D2 | **No automated parity harness against the old Nushell hook.** | Its value dropped once the divergences were catalogued: three of the four are *deliberate* improvements (`note:` lines kept, colon paths parsed, missing-zsnag reported), and the accidental one (missing dedup) is now fixed and unit-tested. A harness would mostly assert the deliberate differences. |
 | D3 | `R012`'s single hit on std — `lib/std/debug/cpu_context.zig:51` calls `std.mem.reverse(native.r[0..])` with one argument against a two-parameter signature — **is a real bug in Zig's standard library** and has not been reported upstream. | It sits in a comptime-dead loongarch64 branch, so it never compiles in practice. Still a genuine defect, and the first concrete instance of the "give back to Zig" goal below. |
+| D5 | **zsnag has found 4 genuine dangling references in Zig's own standard library.** All are in code paths Zig's lazy analysis never reaches, so they compile fine. Unreported upstream. `http/Client.zig:1483` uses `std.posix.SocketError` and `std.posix.ConnectError` in `ConnectUnixError`; neither is declared anywhere in `posix.zig` (they live on `Io.net`, leftovers from the posix→Io migration). `debug.zig:1803` calls `std.fmt.invalidFmtError`, which is declared at `Io/Writer.zig:1802`, not in `fmt.zig`. Plus D3's `std.mem.reverse` arity bug. | Supersedes the earlier note that R013's remaining hits were gaps in the zephem map — they are not. Checked against std source directly. |
 | D4 | `@intCast` advisories (R007) remain on two guarded casts in `src/`. | Both are range-checked on the line above. Suppressing them would hide the rule's only true signal; leaving them costs two lines of output. |
 
 ### Checking this tool without reading its source
@@ -207,7 +208,7 @@ catch. Split the rules by what a hit actually means:
 |---|---|---|
 | **R001** async/await | **0** | **a bug in zsnag.** Modern std cannot contain stale keyword syntax. Must stay 0. |
 | **R012** arity | **1** | **a bug somewhere.** This one is real — see D3. Should stay ≈0. |
-| **R013** unknown path | **3** (opt-in) | **a gap in the zephem map**, since std by definition contains every std path. |
+| **R013** unknown path | **3** (opt-in) | **a dangling reference.** Verified 2026-08-10: all 3 are real stale references in Zig's own std, not map gaps — see D5. |
 | R008 acquire | 10 | heuristic — mixed. Watch the number; a jump means a regression. |
 | R006 stream | 7 | heuristic, never triaged. Same. |
 | R011 deprecated | 409 | **correct.** std has not migrated its own call sites off its own deprecated APIs. |
