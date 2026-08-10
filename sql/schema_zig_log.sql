@@ -1,10 +1,15 @@
--- zig_log — "the book": real Zig mistakes captured live by the zhook PostToolUse
--- hook as they happen on actual .zig edits, labeled by zsnag + zig ast-check.
+-- zig_log — "the book": real Zig mistakes captured live by the PostToolUse hook as
+-- they happen on actual .zig edits, labeled by zsnag + zig ast-check.
 --
--- SQLite (was postgres). The book is single-user local state — it needs no server,
--- so it lives in one file (~/.config/zcanon/book.db, override $ZCANON_BOOK). The
--- hook applies this schema idempotently on first write; no setup step. The semantic
--- INDEX (zig_api/zig_map) stays on postgres+pgvector — that one needs vector search.
+-- HISTORICAL, as of 2026-08-10. This file is no longer executed: the book moved from
+-- sqlite to a plain TSV (~/.config/zcanon/book.tsv, override $ZCANON_BOOK). The reason
+-- was not preference — the sqlite path shelled out to an `sqlite3` binary that was not
+-- installed, so every write failed silently and the book never recorded anything at all.
+-- TSV needs no external binary, no process spawns on the hook's hot path, and no
+-- hand-rolled SQL quoting. It is the format the companion zephem already uses at 10 MB+.
+--
+-- Kept because it remains the authoritative statement of the COLUMN SET and the dedup
+-- semantics below, which the Zig implementation (src/book.zig) reproduces exactly.
 --
 -- Deduplicated: one row per DISTINCT finding (file, rule, message, snippet), with
 -- an occurrence counter (hits) and first/last-seen timestamps. The hook UPSERTs —
