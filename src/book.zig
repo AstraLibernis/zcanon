@@ -33,6 +33,27 @@ pub const Record = struct {
 
 pub const AST_RULE = "ast-check";
 
+/// Rule-group names, matching `snag.Group` plus the compiler's own check. Kept as strings
+/// because the book is a text file read by both the hook and a human.
+pub const GROUP_AST = "ast";
+pub const GROUP_CORE = "core";
+pub const GROUP_MAP = "map";
+
+/// Which group a recorded rule belongs to. `R011`+ are the zephem-backed rules.
+pub fn groupOf(rule: []const u8) []const u8 {
+    if (std.mem.eql(u8, rule, AST_RULE)) return GROUP_AST;
+    if (rule.len == 4 and rule[0] == 'R') {
+        const n = std.fmt.parseInt(u16, rule[1..], 10) catch return GROUP_CORE;
+        if (n >= 11) return GROUP_MAP;
+    }
+    return GROUP_CORE;
+}
+
+fn isActive(group: []const u8, active: []const []const u8) bool {
+    for (active) |g| if (std.mem.eql(u8, g, group)) return true;
+    return false;
+}
+
 pub const header = "first_ts\tlast_ts\thits\tzig_version\tfile\trule\tseverity\tline\tcol\tmessage\tsnippet";
 const n_cols = 11;
 
@@ -214,15 +235,16 @@ pub const Book = struct { // zsnag:ok
     }
 
     /// Drop rows for `file` that the current scan did NOT reproduce — they are fixed.
-    /// Scoped by which checker actually ran, so a crashed zsnag cannot erase its own history
-    /// (and an ast-check that never ran cannot erase ast rows).
-    pub fn pruneFile(b: *Book, file: []const u8, fresh: []const Record, ran_zsnag: bool, ran_ast: bool) void {
+    ///
+    /// Scoped by which rule GROUPS actually ran. Booleans for "zsnag ran" and "ast ran" were
+    /// not enough: zsnag exits 0 even when the zephem map failed to load, so the map-backed
+    /// rules produced nothing while the hook believed they had run — and their entire history
+    /// for the file was deleted as "resolved". A group absent from `active` is never pruned.
+    pub fn pruneFile(b: *Book, file: []const u8, fresh: []const Record, active: []const []const u8) void {
         var i: usize = 0;
         while (i < b.recs.items.len) {
             const r = b.recs.items[i];
-            const is_ast = std.mem.eql(u8, r.rule, AST_RULE);
-            const in_scope = std.mem.eql(u8, r.file, file) and
-                ((is_ast and ran_ast) or (!is_ast and ran_zsnag));
+            const in_scope = std.mem.eql(u8, r.file, file) and isActive(groupOf(r.rule), active);
             if (!in_scope) {
                 i += 1;
                 continue;

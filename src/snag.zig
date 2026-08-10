@@ -32,13 +32,24 @@ pub const Sev = enum {
     }
 };
 
-/// Every rule lives here. Adding one means adding a table entry and a `find` site — nothing
-/// is a bare string literal at the call site any more, so `--list-rules` and the zephem
-/// self-check can both enumerate them.
+/// Which checker a rule belongs to. The hook prunes the book per group, so a group that did
+/// not run cannot erase its own history — see `book.pruneFile`.
+pub const Group = enum {
+    /// Self-contained rules; run whenever zsnag runs.
+    core,
+    /// Rules that need the zephem map; absent map means they did not run at all.
+    map,
+
+    pub fn name(g: Group) []const u8 {
+        return @tagName(g);
+    }
+};
+
 pub const Rule = struct {
     code: []const u8,
     sev: Sev,
     msg: []const u8,
+    group: Group = .core,
     /// Short statement of what makes the rule true, for `--list-rules`.
     premise: []const u8 = "",
 };
@@ -60,6 +71,9 @@ pub const Id = enum {
     r013_unknown_std,
 };
 
+/// Every rule lives here. Adding one means adding a table entry and a `find` site — nothing
+/// is a bare string literal at the call site any more, so `--list-rules`, the group-scoped
+/// prune, and the zephem self-check can all enumerate them.
 pub const rules = std.enums.directEnumArray(Id, Rule, 0, .{
     .r001_async = .{
         .code = "R001",
@@ -115,18 +129,21 @@ pub const rules = std.enums.directEnumArray(Id, Rule, 0, .{
         .msg = "debug.print left in code? remove or use std.log.",
     },
     .r011_deprecated = .{
+        .group = .map,
         .code = "R011",
         .sev = .warn,
         .msg = "this std API is deprecated.",
         .premise = "the zephem map records a deprecation on this decl (message comes from the map)",
     },
     .r012_arity = .{
+        .group = .map,
         .code = "R012",
         .sev = .warn,
         .msg = "wrong number of arguments for this std call.",
         .premise = "argument count at the call site disagrees with the map's signature",
     },
     .r013_unknown_std = .{
+        .group = .map,
         .code = "R013",
         .sev = .info,
         .msg = "this std path is not in the zephem map — cannot verify it exists.",
@@ -293,6 +310,20 @@ pub fn scanWithMap(
     }.lt);
 }
 
+/// True only for the STALE KEYWORD SYNTAX — `async foo()` / `await frame` — which is the sole
+/// thing R001 exists to catch.
+///
+/// The old syntax puts an expression directly after the keyword, so the next token is an
+/// identifier. Every other position is ordinary modern usage of an ordinary identifier, and
+/// std is full of them: `async,` is an enum member, `.async = async` reads a field, and
+/// `await(ev, future, …)` calls a function actually named `await`. Matching the bare name
+/// flagged 13 error-severity findings across std — BLOCKING, on correct code, for the one
+/// reason that is backwards: those declarations are only legal *because* it is no longer a
+/// keyword.
+fn isStaleAsyncSyntax(t: []const Tk, i: usize) bool {
+    return i + 1 < t.len and t[i + 1].tag == .identifier;
+}
+
 /// Single-token and short-lookback rules: R001, R002, R003, R004, R005, R007, R009, R010.
 fn scanTokens(st: Scanner, t: []const Tk) !void {
     for (t, 0..) |tok, i| {
@@ -302,7 +333,7 @@ fn scanTokens(st: Scanner, t: []const Tk) !void {
         switch (tok.tag) {
             .identifier => {
                 const w = st.text(tok);
-                if (!after_dot and (eq(w, "async") or eq(w, "await")))
+                if (!after_dot and (eq(w, "async") or eq(w, "await")) and isStaleAsyncSyntax(t, i))
                     try st.emit(tok.start, .r001_async);
                 if (!after_dot and eq(w, "usingnamespace"))
                     try st.emit(tok.start, .r002_usingnamespace);
@@ -560,6 +591,19 @@ pub fn renderJson(w: *std.Io.Writer, findings: []const Finding) !void {
         try std.json.Stringify.value(f.msg, .{}, w);
         try w.writeAll("}\n");
     }
+}
+
+/// A machine-readable status record, emitted as the FIRST JSONL line. It states which rule
+/// groups actually ran, so the consumer never has to infer that from an exit code — inferring
+/// it is what let a failed map load masquerade as "the map rules found nothing", which then
+/// deleted their history from the book.
+pub fn renderStatus(w: *std.Io.Writer, groups: []const Group) !void {
+    try w.writeAll("{\"zsnag\":\"status\",\"ran\":[");
+    for (groups, 0..) |g, i| {
+        if (i > 0) try w.writeAll(",");
+        try std.json.Stringify.value(g.name(), .{}, w);
+    }
+    try w.writeAll("]}\n");
 }
 
 pub fn listRules(w: *std.Io.Writer) !void {

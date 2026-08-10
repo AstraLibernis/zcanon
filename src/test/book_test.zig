@@ -120,7 +120,7 @@ test "prune drops resolved findings for the scanned file only" {
     try b.upsert(&.{ keep, rec("a.zig", "R005", "fixed", "s2"), rec("other.zig", "R005", "untouched", "s3") });
     try testing.expectEqual(@as(usize, 3), b.recs.items.len);
 
-    b.pruneFile("a.zig", &.{keep}, true, true);
+    b.pruneFile("a.zig", &.{keep}, &.{ book.GROUP_CORE, book.GROUP_AST });
     try testing.expectEqual(@as(usize, 2), b.recs.items.len);
     try testing.expectEqualStrings("still here", b.recs.items[0].message);
     try testing.expectEqualStrings("untouched", b.recs.items[1].message);
@@ -137,15 +137,69 @@ test "a checker that did not run cannot prune its own history" {
     });
 
     // zsnag crashed: only ast-check results are trustworthy this round.
-    b.pruneFile("a.zig", &.{}, false, true);
+    b.pruneFile("a.zig", &.{}, &.{book.GROUP_AST});
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqualStrings("zsnag finding", b.recs.items[0].message);
 
     // now the reverse: ast-check did not run.
     try b.upsert(&.{rec("a.zig", book.AST_RULE, "ast finding", "s2")});
-    b.pruneFile("a.zig", &.{}, true, false);
+    b.pruneFile("a.zig", &.{}, &.{book.GROUP_CORE});
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqualStrings("ast finding", b.recs.items[0].message);
+}
+
+test "rules map to the group that owns them" {
+    try testing.expectEqualStrings(book.GROUP_AST, book.groupOf(book.AST_RULE));
+    try testing.expectEqualStrings(book.GROUP_CORE, book.groupOf("R001"));
+    try testing.expectEqualStrings(book.GROUP_CORE, book.groupOf("R010"));
+    try testing.expectEqualStrings(book.GROUP_MAP, book.groupOf("R011"));
+    try testing.expectEqualStrings(book.GROUP_MAP, book.groupOf("R013"));
+    try testing.expectEqualStrings(book.GROUP_CORE, book.groupOf("nonsense"));
+}
+
+test "a zephem map failure cannot erase the map rules' history" {
+    const gpa = testing.allocator;
+    var b: book.Book = .init(gpa);
+    defer b.deinit();
+
+    try b.upsert(&.{
+        rec("a.zig", "R004", "core finding", "s1"),
+        rec("a.zig", "R011", "deprecated API", "s2"),
+        rec("a.zig", "R012", "wrong arity", "s3"),
+    });
+
+    // zsnag ran, but the zephem map failed to load — so only `core` is active. The map rules
+    // produced nothing, and that silence must NOT be read as "resolved".
+    b.pruneFile("a.zig", &.{rec("a.zig", "R004", "core finding", "s1")}, &.{book.GROUP_CORE});
+
+    try testing.expectEqual(@as(usize, 3), b.recs.items.len);
+    try testing.expectEqualStrings("R011", b.recs.items[1].rule);
+    try testing.expectEqualStrings("R012", b.recs.items[2].rule);
+}
+
+test "when the map group IS active, resolved map findings are pruned" {
+    const gpa = testing.allocator;
+    var b: book.Book = .init(gpa);
+    defer b.deinit();
+    try b.upsert(&.{
+        rec("a.zig", "R004", "core finding", "s1"),
+        rec("a.zig", "R011", "deprecated API", "s2"),
+    });
+
+    b.pruneFile("a.zig", &.{rec("a.zig", "R004", "core finding", "s1")}, &.{ book.GROUP_CORE, book.GROUP_MAP });
+
+    try testing.expectEqual(@as(usize, 1), b.recs.items.len);
+    try testing.expectEqualStrings("R004", b.recs.items[0].rule);
+}
+
+test "no active groups prunes nothing at all" {
+    const gpa = testing.allocator;
+    var b: book.Book = .init(gpa);
+    defer b.deinit();
+    try b.upsert(&.{ rec("a.zig", "R004", "m1", "s1"), rec("a.zig", book.AST_RULE, "m2", "s2") });
+
+    b.pruneFile("a.zig", &.{}, &.{});
+    try testing.expectEqual(@as(usize, 2), b.recs.items.len);
 }
 
 test "write then parse round-trips the whole book" {

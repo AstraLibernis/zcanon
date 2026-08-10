@@ -53,8 +53,16 @@ pub fn load(c: vars.Ctx, arena: std.mem.Allocator, path: []const u8) !Value {
         error.FileNotFound => try arena.dupe(u8, "{}"),
         else => return e,
     };
-    const trimmed = std.mem.trim(u8, text, " \t\r\n");
-    return std.json.parseFromSliceLeaky(Value, arena, if (trimmed.len == 0) "{}" else trimmed, .{});
+    // A UTF-8 BOM is legal in a file an editor wrote and is not whitespace, so trimming alone
+    // left it in and every command died on a syntax error.
+    const no_bom = if (std.mem.startsWith(u8, text, "\xEF\xBB\xBF")) text[3..] else text;
+    const trimmed = std.mem.trim(u8, no_bom, " \t\r\n");
+    return std.json.parseFromSliceLeaky(Value, arena, if (trimmed.len == 0) "{}" else trimmed, .{
+        // std defaults to error.DuplicateField. A settings file with a repeated key is
+        // something a JSON reader accepts (last wins) — refusing to install against it is
+        // worse than matching that behaviour.
+        .duplicate_field_behavior = .use_last,
+    });
 }
 
 /// Ensure `root.hooks.PostToolUse` exists as an array and return it.
@@ -82,9 +90,9 @@ fn postToolUse(gpa: std.mem.Allocator, root: *Value, create: bool) !?*std.json.A
     };
 }
 
-/// Drop every marker-tagged entry. Returns how many were removed.
-pub fn removeOurs(gpa: std.mem.Allocator, root: *Value) !usize {
-    const arr = (try postToolUse(gpa, root, false)) orelse return 0;
+/// Filter our entries out of an array in place. Does not touch surrounding structure — that
+/// separation is what keeps `addOurs` from disturbing the user's key order.
+fn filterOurs(arr: *std.json.Array) usize {
     var removed: usize = 0;
     var i: usize = 0;
     while (i < arr.items.len) {
@@ -93,8 +101,18 @@ pub fn removeOurs(gpa: std.mem.Allocator, root: *Value) !usize {
             removed += 1;
         } else i += 1;
     }
-    // Leave no empty scaffolding behind that we created.
-    if (arr.items.len == 0) {
+    return removed;
+}
+
+/// Drop every marker-tagged entry. Returns how many were removed.
+pub fn removeOurs(gpa: std.mem.Allocator, root: *Value) !usize {
+    const arr = (try postToolUse(gpa, root, false)) orelse return 0;
+    const removed = filterOurs(arr);
+
+    // Clean up scaffolding ONLY if we actually removed something. Running this
+    // unconditionally deleted a user's own pre-existing empty "PostToolUse": [] — a key we
+    // never created — which is exactly what this module promises not to do.
+    if (removed > 0 and arr.items.len == 0) {
         const robj = &root.object;
         const hooks = &robj.getPtr("hooks").?.object;
         _ = hooks.orderedRemove("PostToolUse");
@@ -105,8 +123,10 @@ pub fn removeOurs(gpa: std.mem.Allocator, root: *Value) !usize {
 
 /// Idempotent: any prior marker-tagged entry is replaced, never duplicated.
 pub fn addOurs(gpa: std.mem.Allocator, root: *Value, cmd: []const u8) !void {
-    _ = try removeOurs(gpa, root);
+    // Filter in place rather than calling removeOurs: that would delete an emptied
+    // `PostToolUse` and recreate it at the END of `hooks`, silently reordering the user's keys.
     const arr = (try postToolUse(gpa, root, true)).?;
+    _ = filterOurs(arr);
 
     var hook: std.json.ObjectMap = .empty;
     try hook.put(gpa, "type", .{ .string = "command" });

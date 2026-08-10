@@ -174,6 +174,91 @@ test "render round-trips through a re-parse" {
     try testing.expectEqualStrings("dark", again.value.object.get("theme").?.string);
 }
 
+test "uninstall does NOT delete a pre-existing empty PostToolUse we never created" {
+    var p = try parse(
+        \\{"theme":"dark","hooks":{"PostToolUse":[]}}
+    );
+    defer p.deinit();
+    const removed = try settings.removeOurs(p.gpa(), &p.value);
+
+    try testing.expectEqual(@as(usize, 0), removed);
+    const hooks = p.value.object.get("hooks").?.object;
+    try testing.expect(hooks.get("PostToolUse") != null);
+    try testing.expectEqual(@as(usize, 0), hooks.get("PostToolUse").?.array.items.len);
+}
+
+test "install preserves the user's key order inside hooks" {
+    var p = try parse(
+        \\{"hooks":{"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"x"}]}],"PreToolUse":[],"Stop":[]}}
+    );
+    defer p.deinit();
+    try settings.addOurs(p.gpa(), &p.value, "/bin/zcanon hook  # zcanon-zig-hook");
+
+    const hooks = p.value.object.get("hooks").?.object;
+    const keys = hooks.keys();
+    try testing.expectEqualStrings("PostToolUse", keys[0]);
+    try testing.expectEqualStrings("PreToolUse", keys[1]);
+    try testing.expectEqualStrings("Stop", keys[2]);
+}
+
+test "reinstalling over our own entry still preserves order" {
+    var p = try parse(
+        \\{"hooks":{"PostToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"old  # zcanon-zig-hook"}]}],"PreToolUse":[]}}
+    );
+    defer p.deinit();
+    try settings.addOurs(p.gpa(), &p.value, "/bin/zcanon hook  # zcanon-zig-hook");
+
+    const hooks = p.value.object.get("hooks").?.object;
+    try testing.expectEqualStrings("PostToolUse", hooks.keys()[0]);
+    try testing.expectEqual(@as(usize, 1), hooks.get("PostToolUse").?.array.items.len);
+}
+
+test "a settings file with a UTF-8 BOM still parses" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+
+    // load() reads from disk, so exercise the same normalisation directly.
+    const with_bom = "\xEF\xBB\xBF{\"theme\":\"dark\"}";
+    const no_bom = if (std.mem.startsWith(u8, with_bom, "\xEF\xBB\xBF")) with_bom[3..] else with_bom;
+    const v = try std.json.parseFromSliceLeaky(Value, gpa, no_bom, .{ .duplicate_field_behavior = .use_last });
+    try testing.expectEqualStrings("dark", v.object.get("theme").?.string);
+}
+
+test "a duplicate key takes the last value instead of aborting" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const text =
+        \\{"theme":"light","theme":"dark"}
+    ;
+    // std's default is error.DuplicateField, which broke install/uninstall/status outright.
+    try testing.expectError(
+        error.DuplicateField,
+        std.json.parseFromSliceLeaky(Value, a.allocator(), text, .{}),
+    );
+    const v = try std.json.parseFromSliceLeaky(Value, a.allocator(), text, .{
+        .duplicate_field_behavior = .use_last,
+    });
+    try testing.expectEqualStrings("dark", v.object.get("theme").?.string);
+}
+
+test "floats and nulls survive a render round-trip" {
+    var p = try parse(
+        \\{"a":1.5,"b":null,"c":[],"d":{"e":true},"f":"ünïcøde"}
+    );
+    defer p.deinit();
+    try settings.addOurs(p.gpa(), &p.value, "/bin/zcanon hook  # zcanon-zig-hook");
+    const text = try settings.render(p.gpa(), p.value);
+
+    var again = try parse(text);
+    defer again.deinit();
+    try testing.expectEqual(@as(f64, 1.5), again.value.object.get("a").?.float);
+    try testing.expectEqual(std.json.Value.null, again.value.object.get("b").?);
+    try testing.expectEqual(@as(usize, 0), again.value.object.get("c").?.array.items.len);
+    try testing.expect(again.value.object.get("d").?.object.get("e").?.bool);
+    try testing.expectEqualStrings("ünïcøde", again.value.object.get("f").?.string);
+}
+
 test "a non-object settings root is refused rather than overwritten" {
     var p = try parse("[1,2,3]");
     defer p.deinit();

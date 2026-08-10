@@ -38,8 +38,18 @@ pub fn filePathFromPayload(arena: std.mem.Allocator, payload: []const u8) !?[]co
     };
 }
 
-/// zsnag emits JSONL — one object per finding. Lines that aren't objects are skipped.
-pub fn parseSnagJson(arena: std.mem.Allocator, text: []const u8, out: *std.ArrayList(Finding)) !void {
+/// zsnag emits JSONL — a status record, then one object per finding. Lines that aren't
+/// objects are skipped.
+///
+/// `groups` collects the rule groups zsnag reports as having actually run. The caller must
+/// prune the book only for those: zsnag exits 0 even when the zephem map failed to load, so
+/// "no map findings" and "the map rules never ran" are otherwise indistinguishable.
+pub fn parseSnagJson(
+    arena: std.mem.Allocator,
+    text: []const u8,
+    out: *std.ArrayList(Finding),
+    groups: ?*std.ArrayList([]const u8),
+) !void {
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
@@ -49,6 +59,18 @@ pub fn parseSnagJson(arena: std.mem.Allocator, text: []const u8, out: *std.Array
             .object => |x| x,
             else => continue,
         };
+        if (strField(o, "zsnag")) |kind| {
+            if (std.mem.eql(u8, kind, "status")) {
+                if (groups) |g| switch (o.get("ran") orelse std.json.Value.null) {
+                    .array => |arr| for (arr.items) |item| switch (item) {
+                        .string => |s| try g.append(arena, s),
+                        else => {},
+                    },
+                    else => {},
+                };
+                continue;
+            }
+        }
         try out.append(arena, .{
             .rule = strField(o, "rule") orelse continue,
             .severity = strField(o, "severity") orelse "info",
@@ -79,11 +101,23 @@ fn intField(o: std.json.ObjectMap, name: []const u8) ?u32 {
 /// part, rather than matching `[^:]+` for the filename — a path containing a colon parses
 /// correctly this way. `note:` continuation lines are kept as advisory context instead of
 /// being dropped.
-pub fn parseAstCheck(arena: std.mem.Allocator, text: []const u8, out: *std.ArrayList(Finding)) !void {
+pub fn parseAstCheck(
+    arena: std.mem.Allocator,
+    file: []const u8,
+    text: []const u8,
+    out: *std.ArrayList(Finding),
+) !void {
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r");
+        const line = std.mem.trimEnd(u8, raw, " \t\r");
         if (line.len == 0) continue;
+
+        // Two guards, because `zig ast-check` ECHOES the offending source line (indented)
+        // under each diagnostic, and that echo may itself contain ": error: " — a string
+        // literal holding a diagnostic, say. Trimming first and pattern-matching anywhere
+        // turned such an echo into a phantom BLOCKING finding.
+        //   1. a real diagnostic starts at column 0; the echo and its caret are indented.
+        if (line[0] == ' ' or line[0] == '\t') continue;
 
         const sev: []const u8, const sep: []const u8 = if (std.mem.find(u8, line, ": error: ") != null)
             .{ "error", ": error: " }
@@ -99,6 +133,11 @@ pub fn parseAstCheck(arena: std.mem.Allocator, text: []const u8, out: *std.Array
         // loc is "<path>:<line>:<col>" — take the last two colon-separated fields.
         const c2 = std.mem.findScalarLast(u8, loc, ':') orelse continue;
         const c1 = std.mem.findScalarLast(u8, loc[0..c2], ':') orelse continue;
+
+        //   2. ast-check only ever reports on the file it was given, so the path must match.
+        //      This is what actually kills an unindented echo at column 0.
+        if (!std.mem.eql(u8, loc[0..c1], file)) continue;
+
         const ln = std.fmt.parseInt(u32, loc[c1 + 1 .. c2], 10) catch continue;
         const col = std.fmt.parseInt(u32, loc[c2 + 1 ..], 10) catch continue;
 
@@ -163,10 +202,37 @@ pub fn renderContext(
             try w.writer.print("\n  [{s}] {s}:{d}:{d}  {s}", .{ f.rule, base, f.line, f.col, f.message });
         }
     }
-    try w.writer.writeAll(HINT);
+    return w.written();
+}
 
-    const out = w.written();
-    return if (out.len > MAX_CONTEXT) out[0..MAX_CONTEXT] else out;
+/// Truncate to at most `max` bytes without splitting a UTF-8 sequence. The tier headers carry
+/// `▲ ⚠ ℹ ·` and a filename may be non-ASCII, so a raw byte slice can cut mid-codepoint and
+/// produce invalid JSON.
+pub fn truncateUtf8(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    var end = max;
+    // Walk back off any continuation bytes (0b10xxxxxx) to land on a lead byte.
+    while (end > 0 and (s[end] & 0xC0) == 0x80) end -= 1;
+    return s[0..end];
+}
+
+/// Assemble the final context: findings, then any notices, then the hint — bounded by
+/// MAX_CONTEXT as a whole.
+///
+/// The budget is taken from the *findings* only. Notices explain why a check did not run and
+/// the hint says how to look an API up; both are short and both are useless to drop, so they
+/// are reserved rather than truncated away. Returns null when there is nothing to say.
+pub fn compose(arena: std.mem.Allocator, body: []const u8, notices: []const []const u8) !?[]const u8 {
+    var extra: usize = HINT.len;
+    for (notices) |n| extra += n.len;
+    if (body.len == 0 and extra == HINT.len) return null;
+
+    const budget = if (extra >= MAX_CONTEXT) 0 else MAX_CONTEXT - extra;
+    var w: std.Io.Writer.Allocating = .init(arena);
+    try w.writer.writeAll(truncateUtf8(body, budget));
+    for (notices) |n| try w.writer.writeAll(n);
+    try w.writer.writeAll(HINT);
+    return w.written();
 }
 
 /// The PostToolUse response envelope. `hookSpecificOutput.additionalContext` is the modern

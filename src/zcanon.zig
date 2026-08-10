@@ -88,19 +88,23 @@ fn runHook(c: vars.Ctx) !void {
     const bin_dir = std.fs.path.dirname(self) orelse ".";
     const zsnag_path = try std.fs.path.join(c.gpa, &.{ bin_dir, "zsnag" });
 
-    var ran_zsnag = false;
+    // Which rule groups actually ran. zsnag REPORTS this in its status record rather than
+    // us inferring it from an exit code — inference is what let a failed zephem map load look
+    // like "the map rules found nothing", which then erased their history from the book.
+    var active: std.ArrayList([]const u8) = .empty;
     var notice: []const u8 = "";
     if (exists(c, zsnag_path)) {
         const r = std.process.run(c.gpa, c.io, .{ .argv = &.{ zsnag_path, "--json", path } }) catch null;
         if (r) |res| {
-            // zsnag prints findings on stderr today (ledger B3), so read both streams.
-            ran_zsnag = switch (res.term) {
-                .exited => |code| code <= 1,
+            const usable = switch (res.term) {
+                // 0 = clean, 1 = error-severity findings. 3 = a file could not be read, and
+                // 2 = usage; neither is a scan whose absence of findings means anything.
+                .exited => |code| code == 0 or code == 1,
                 else => false,
             };
-            if (ran_zsnag) {
-                try hook.parseSnagJson(c.gpa, res.stdout, &findings);
-                try hook.parseSnagJson(c.gpa, res.stderr, &findings);
+            if (usable) {
+                try hook.parseSnagJson(c.gpa, res.stdout, &findings, &active);
+                try hook.parseSnagJson(c.gpa, res.stderr, &findings, &active);
             }
         }
     } else {
@@ -112,23 +116,39 @@ fn runHook(c: vars.Ctx) !void {
         );
     }
 
-    var ran_ast = false;
     if (std.process.run(c.gpa, c.io, .{ .argv = &.{ "zig", "ast-check", path } }) catch null) |res| {
-        ran_ast = true;
-        try hook.parseAstCheck(c.gpa, res.stderr, &findings);
+        // Only a normal exit counts. A killed or signalled ast-check produces no diagnostics,
+        // and treating that as "ran" erased the file's whole ast history from the book.
+        switch (res.term) {
+            .exited => {
+                try active.append(c.gpa, book.GROUP_AST);
+                try hook.parseAstCheck(c.gpa, path, res.stderr, &findings);
+            },
+            else => {},
+        }
     }
 
     hook.sortFindings(findings.items);
     const base = std.fs.path.basename(path);
-    try recordToBook(c, path, src, findings.items, ran_zsnag, ran_ast);
 
-    const ctx = (try hook.renderContext(c.gpa, base, path, findings.items)) orelse
-        (if (notice.len == 0) return else notice);
-    const full = if (notice.len == 0) ctx else try std.mem.concat(c.gpa, u8, &.{ ctx, notice });
+    // The book is best-effort. A write failure (or error.NegativeTimestamp from a bad clock)
+    // must not propagate: a non-zero exit surfaces as a hook ERROR with no findings, which is
+    // the opposite of the always-report invariant above. Say so in-band instead.
+    var book_notice: []const u8 = "";
+    recordToBook(c, path, src, findings.items, active.items) catch |e| {
+        book_notice = std.fmt.allocPrint(
+            c.gpa,
+            "\n\n⚠ the book was not updated ({s}) — findings above are still valid.",
+            .{@errorName(e)},
+        ) catch "";
+    };
+
+    const body = (try hook.renderContext(c.gpa, base, path, findings.items)) orelse "";
+    const ctx = (try hook.compose(c.gpa, body, &.{ notice, book_notice })) orelse return;
 
     var out_buf: [1 << 16]u8 = undefined;
     var w = stdout(c, &out_buf);
-    try w.interface.writeAll(try hook.renderResponse(c.gpa, full));
+    try w.interface.writeAll(try hook.renderResponse(c.gpa, ctx));
     try w.interface.flush();
 }
 
@@ -137,8 +157,7 @@ fn recordToBook(
     path: []const u8,
     src: []const u8,
     findings: []const hook.Finding,
-    ran_zsnag: bool,
-    ran_ast: bool,
+    active: []const []const u8,
 ) !void {
     var b: book.Book = .init(c.gpa);
     const book_path = try vars.bookPath(c);
@@ -167,7 +186,7 @@ fn recordToBook(
         });
     }
 
-    b.pruneFile(path, fresh.items, ran_zsnag, ran_ast);
+    b.pruneFile(path, fresh.items, active);
     try b.upsert(fresh.items);
     try writeBook(c, &b, book_path);
 }

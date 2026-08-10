@@ -126,6 +126,17 @@ Defects, closed explicitly rather than quietly. Opened 2026-08-10.
 | B12 | OPEN | `snag.zig` R013 | **False positive on enum-tag-then-method.** `std.Io.Clock.real.now(io)` resolves as the dotted path `std.Io.Clock.real.now`, which is not a map entry — `real` is an enum *tag* and `now` is a method on the enum. The chain-stops-at-a-call rule does not help because there is no intervening call. Needs the resolver to notice that a prefix (`std.Io.Clock.real`) resolves with kind `tag` and fall back to the parent type's member. Live example suppressed in `src/book.zig`. |
 | B9 | OPEN (upstream) | zephem | Subcommand parsers ignore unknown flags, so `zephem std --help` performs a **full map regeneration** and `zephem depth --help` starts the multi-minute L5 sweep. Never forward flags to a zephem subcommand. |
 
+**Adversarial audit, 2026-08-10.** After R012's first implementation shipped 16 false positives
+found by accident, the work was handed to two independent reviewers — one blind, one refuting
+specific claims. Both found real defects; the confirmed ones are B13–B19 above. Two claims of
+mine were refuted and are corrected in the record: "byte-identical parity with the Nushell hook"
+held for one fixture only (three divergences are deliberate ledger fixes, one — missing dedup —
+was not), and "R013 is low-noise" was measured on 15 files and is wrong (219 firings on std).
+
+Also worth recording: **zsnag found a real bug in Zig's standard library.**
+`lib/std/debug/cpu_context.zig:51` calls `std.mem.reverse(native.r[0..])` with one argument
+against a two-parameter signature. R012 working as designed.
+
 **Found by dogfooding, already closed.** R012's first implementation counted commas rather
 than parameters, so every wrapped std signature with a trailing comma (`fn sort( a, b, c, d, )`)
 read as one parameter too many — 16 false positives on zcanon's own source in its first run.
@@ -136,6 +147,14 @@ zero times on correct code.
 `std.mem.indexOf` → `find`, `lastIndexOfScalar` → `findScalarLast`, `indexOfScalarPos` →
 `findScalarPos`, `indexOfScalar` → `findScalar`. All written from stale memory, all caught by
 R011 reading the map, all fixed. This is the integration paying for itself on day one.
+
+| B13 | **CLOSED** 2026-08-10 | `zcanon.zig` | The "zsnag was NOT run" notice was emitted twice: with no findings, `ctx` was assigned `notice` and then concatenated with `notice` again. **Fixed:** `hook.compose` assembles body + notices + hint exactly once. |
+| B14 | **CLOSED** 2026-08-10 | `hook.zig` | **Phantom BLOCKING findings.** `zig ast-check` echoes the offending source line under each diagnostic; `parseAstCheck` trimmed each line and accepted anything containing `": error: "`, so an echoed line holding that string parsed as a second, invented diagnostic at error severity. **Fixed:** a diagnostic must start at column 0 and name the file under check. Regression-tested with verbatim ast-check output. |
+| B15 | **CLOSED** 2026-08-10 | `hook.zig` / `zcanon.zig` | `MAX_CONTEXT` was a raw byte slice over text containing `▲ ⚠ ℹ ·` (could split a UTF-8 sequence), it silently dropped `HINT`, and the notice was concatenated *after* truncating so output could exceed the cap. **Fixed:** `truncateUtf8` cuts on a codepoint boundary; notices and hint are reserved from the budget, not truncated away. |
+| B16 | **CLOSED** 2026-08-10 | `snag.zig` R001 | **8 error-severity false positives on `lib/std/Io.zig` alone**, 13 across std. `async`/`await` are ordinary identifiers now, so std declares them (`async,` as an enum member, `await(ev, …)` as a call, `.async = async` reading a field) — and R001 matched the bare name. **Fixed:** flag only the stale syntax `async <expr>` / `await <expr>`, i.e. followed by an identifier. Measured 13 → 0 on std, with the real pattern still caught. |
+| B17 | **CLOSED** 2026-08-10 | `zsnag.zig` / `zcanon.zig` / `book.zig` | **Three "the checker ran" lies silently erased the book.** zsnag exits 0 even when the zephem map fails to load, so the hook believed R011–R013 had run and found nothing → `pruneFile` deleted their entire history for the file (a moved `$ZEPHEM_HOME` wiped a third of the book). Likewise `ran_ast` was set without checking `term`, and exit 1 conflated "error findings" with "file unreadable". **Fixed:** zsnag *reports* which rule groups ran in a machine-readable status record; pruning is scoped per group; exit codes are distinct (0 clean, 1 error findings, 2 usage, 3 unreadable). |
+| B18 | **CLOSED** 2026-08-10 | `settings.zig` | Three ways the user's own settings file was damaged: the empty-scaffolding cleanup ran even when nothing was removed (deleting a pre-existing empty `"PostToolUse": []`); `addOurs` deleted and recreated `PostToolUse`, silently moving it to the END of `hooks`; and `load` aborted outright on a duplicate key (`error.DuplicateField`) or a UTF-8 BOM. **Fixed:** clean up only after an actual removal, filter in place, strip the BOM, `duplicate_field_behavior = .use_last`. |
+| B19 | **CLOSED** 2026-08-10 | `zcanon.zig` | `try recordToBook(...)` was the only unswallowed error in `runHook`, so a book-write failure (or `error.NegativeTimestamp`) exited non-zero with zero findings — the opposite of the documented always-report invariant. **Fixed:** book failures degrade to an in-band notice. |
 
 **Stretch — give back to Zig**
 The book accumulates data on which mistakes are most common and where the compiler's error

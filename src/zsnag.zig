@@ -96,10 +96,22 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     }
 
-    if (json) try snag.renderJson(out, findings.items) else try snag.renderText(out, findings.items);
+    if (json) {
+        // Status first, so a consumer knows which groups ran before it reads any findings.
+        var groups: std.ArrayList(snag.Group) = .empty;
+        try groups.append(gpa, .core);
+        if (map != null) try groups.append(gpa, .map);
+        try snag.renderStatus(out, groups.items);
+        try snag.renderJson(out, findings.items);
+    } else {
+        try snag.renderText(out, findings.items);
+    }
     try out.flush();
 
-    if (snag.anyError(findings.items) or bad_read) std.process.exit(1);
+    // Distinct exit codes: an unreadable file is not the same event as "found error-severity
+    // findings", and conflating them let a failed read be recorded as a successful scan.
+    if (bad_read) std.process.exit(3);
+    if (snag.anyError(findings.items)) std.process.exit(1);
 }
 
 fn zigVersion(c: vars.Ctx) []const u8 {

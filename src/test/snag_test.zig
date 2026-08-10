@@ -45,12 +45,30 @@ test "the enum and the table agree" {
 
 // ---- individual rules (ported from the deleted nu/test.nu) ----------------
 
-test "R001 flags bare async/await but not method calls" {
+test "R001 flags the stale keyword syntax" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     try testing.expect(has(try codes(a.allocator(), "const x = async foo();"), "R001"));
-    try testing.expect(!has(try codes(a.allocator(), "const x = handle.async();"), "R001"));
-    try testing.expect(!has(try codes(a.allocator(), "const x = h.await();"), "R001"));
+    try testing.expect(has(try codes(a.allocator(), "const y = await frame;"), "R001"));
+}
+
+test "R001 does not fire on async/await as ordinary identifiers" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    // Every one of these appears in Zig's own std and is correct code. Matching the bare
+    // name produced 8 error-severity findings on lib/std/Io.zig alone.
+    const ok = [_][:0]const u8{
+        "const x = handle.async();", // method call
+        "const y = h.await();",
+        "pub fn async(g: *Group) void {}", // declaring a fn named async
+        "const E = enum { async, await };", // enum members
+        "const v = .{ .async = async, .await = await };", // field init reading a decl
+        "await(ev, future, result);", // calling a fn named await
+        "async: *const fn () void,", // struct field
+    };
+    for (ok) |src| {
+        try testing.expect(!has(try codes(a.allocator(), src), "R001"));
+    }
 }
 
 test "R003 flags mem.copy/mem.set only after a mem. qualifier" {

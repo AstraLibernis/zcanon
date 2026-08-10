@@ -48,13 +48,45 @@ test "zsnag JSONL parses, and non-JSON lines are skipped" {
         \\{"file":"a.zig","line":24,"col":21,"rule":"R004","severity":"warn","message":"catch unreachable"}
         \\
     ;
-    try hook.parseSnagJson(a.allocator(), text, &out);
+    try hook.parseSnagJson(a.allocator(), text, &out, null);
 
     try testing.expectEqual(@as(usize, 2), out.items.len);
     try testing.expectEqualStrings("R002", out.items[0].rule);
     try testing.expectEqual(@as(u32, 2), out.items[0].line);
     try testing.expectEqualStrings("warn", out.items[1].severity);
     try testing.expectEqual(@as(u32, 21), out.items[1].col);
+}
+
+test "the status record reports which rule groups ran" {
+    var a = arena();
+    defer a.deinit();
+    var out: std.ArrayList(hook.Finding) = .empty;
+    var groups: std.ArrayList([]const u8) = .empty;
+    const text =
+        \\{"zsnag":"status","ran":["core","map"]}
+        \\{"file":"a.zig","line":2,"col":1,"rule":"R011","severity":"warn","message":"deprecated"}
+        \\
+    ;
+    try hook.parseSnagJson(a.allocator(), text, &out, &groups);
+
+    try testing.expectEqual(@as(usize, 2), groups.items.len);
+    try testing.expectEqualStrings("core", groups.items[0]);
+    try testing.expectEqualStrings("map", groups.items[1]);
+    // The status record is not itself a finding.
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+}
+
+test "a status record reporting only core leaves map inactive" {
+    var a = arena();
+    defer a.deinit();
+    var out: std.ArrayList(hook.Finding) = .empty;
+    var groups: std.ArrayList([]const u8) = .empty;
+    // What zsnag emits when the zephem map could not be loaded.
+    try hook.parseSnagJson(a.allocator(), "{\"zsnag\":\"status\",\"ran\":[\"core\"]}\n", &out, &groups);
+
+    try testing.expectEqual(@as(usize, 1), groups.items.len);
+    try testing.expectEqualStrings("core", groups.items[0]);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
 }
 
 test "ast-check: a path containing a colon still parses (B8)" {
@@ -65,7 +97,7 @@ test "ast-check: a path containing a colon still parses (B8)" {
         \\/home/u/weird:dir/main.zig:7:9: error: local variable is never mutated
         \\
     ;
-    try hook.parseAstCheck(a.allocator(), text, &out);
+    try hook.parseAstCheck(a.allocator(), "/home/u/weird:dir/main.zig", text, &out);
 
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expectEqual(@as(u32, 7), out.items[0].line);
@@ -84,12 +116,42 @@ test "ast-check: note lines are kept as advisory, not dropped (B8)" {
         \\a.zig: not a diagnostic line
         \\
     ;
-    try hook.parseAstCheck(a.allocator(), text, &out);
+    try hook.parseAstCheck(a.allocator(), "a.zig", text, &out);
 
     try testing.expectEqual(@as(usize, 2), out.items.len);
     try testing.expectEqualStrings("error", out.items[0].severity);
     try testing.expectEqualStrings("info", out.items[1].severity);
     try testing.expectEqualStrings("struct declared here", out.items[1].message);
+}
+
+test "an echoed source line is never mistaken for a diagnostic" {
+    var a = arena();
+    defer a.deinit();
+    var out: std.ArrayList(hook.Finding) = .empty;
+    // Verbatim `zig ast-check` output. It echoes the offending source line under each
+    // diagnostic — and here that line contains ": error: " inside a string literal.
+    const text =
+        "phantom.zig:3:11: error: unused local constant\n" ++
+        "    const msg = \"x.zig:1:2: error: boom\";\n" ++
+        "          ^~~\n";
+    try hook.parseAstCheck(a.allocator(), "phantom.zig", text, &out);
+
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expectEqual(@as(u32, 3), out.items[0].line);
+    try testing.expectEqualStrings("unused local constant", out.items[0].message);
+}
+
+test "a diagnostic naming a different file is ignored" {
+    var a = arena();
+    defer a.deinit();
+    var out: std.ArrayList(hook.Finding) = .empty;
+    // Unindented, well-formed, but about some other file — ast-check only reports on the
+    // file it was given, so this is an echo, not a diagnostic.
+    const text = "other.zig:1:2: error: boom\nreal.zig:5:1: error: genuine\n";
+    try hook.parseAstCheck(a.allocator(), "real.zig", text, &out);
+
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expectEqualStrings("genuine", out.items[0].message);
 }
 
 test "snippet is the trimmed source line" {
@@ -150,8 +212,57 @@ test "context is truncated to the cap" {
             .message = "this cast can panic/corrupt if out of range; verify first.",
         });
     }
-    const ctx = (try hook.renderContext(a.allocator(), "big.zig", "src/big.zig", many.items)).?;
-    try testing.expectEqual(@as(usize, hook.MAX_CONTEXT), ctx.len);
+    const body = (try hook.renderContext(a.allocator(), "big.zig", "src/big.zig", many.items)).?;
+    const ctx = (try hook.compose(a.allocator(), body, &.{})).?;
+
+    try testing.expect(ctx.len <= hook.MAX_CONTEXT);
+    // The hint must survive truncation — it is what tells the reader how to check an API.
+    try testing.expect(std.mem.endsWith(u8, ctx, hook.HINT));
+    // And the result must still be valid UTF-8: the tier headers carry ▲ ⚠ ℹ ·.
+    try testing.expect(std.unicode.utf8ValidateSlice(ctx));
+}
+
+test "truncation never splits a UTF-8 sequence" {
+    // "▲" is three bytes; cut at every offset through a run of them.
+    const s = "▲▲▲▲▲▲▲▲";
+    var max: usize = 0;
+    while (max <= s.len) : (max += 1) {
+        const cut = hook.truncateUtf8(s, max);
+        try testing.expect(cut.len <= max);
+        try testing.expect(std.unicode.utf8ValidateSlice(cut));
+    }
+}
+
+test "notices are reserved from the budget, not truncated away" {
+    var a = arena();
+    defer a.deinit();
+    const body = try a.allocator().alloc(u8, hook.MAX_CONTEXT * 2);
+    @memset(body, 'x');
+    const notice = "\n\n⚠ zsnag was NOT run.";
+
+    const ctx = (try hook.compose(a.allocator(), body, &.{notice})).?;
+    try testing.expect(ctx.len <= hook.MAX_CONTEXT);
+    try testing.expect(std.mem.find(u8, ctx, "zsnag was NOT run") != null);
+    try testing.expect(std.mem.endsWith(u8, ctx, hook.HINT));
+}
+
+test "a notice with no findings is emitted exactly once" {
+    var a = arena();
+    defer a.deinit();
+    const notice = "\n\n⚠ zsnag was NOT run.";
+    const ctx = (try hook.compose(a.allocator(), "", &.{ notice, "" })).?;
+
+    var n: usize = 0;
+    var i: usize = 0;
+    while (std.mem.findPos(u8, ctx, i, "zsnag was NOT run")) |at| : (i = at + 1) n += 1;
+    try testing.expectEqual(@as(usize, 1), n);
+}
+
+test "nothing to say composes to null" {
+    var a = arena();
+    defer a.deinit();
+    try testing.expect((try hook.compose(a.allocator(), "", &.{})) == null);
+    try testing.expect((try hook.compose(a.allocator(), "", &.{ "", "" })) == null);
 }
 
 test "response uses the nested hookSpecificOutput form" {
