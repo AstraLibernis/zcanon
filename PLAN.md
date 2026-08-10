@@ -172,6 +172,72 @@ fix. R012's single hit is a TRUE positive and must survive.
 R008's remaining 10 were not individually triaged; the categories fixed were type definitions
 (B1), `[]const u8` (B10), file-global name matching, and ownership transfer via `return`.
 
+### Deferred — small, known, not urgent
+
+Recorded so they are not rediscovered from scratch. None of these block anything.
+
+| # | Item | Why it was left |
+|---|---|---|
+| D1 | **10 R008 and 7 R006 warnings on Zig's std, never individually triaged.** R008 is down from 41; the four fixed categories were type definitions, `[]const u8`, file-global name matching, and ownership transfer via `return`. R006 was never measured before this audit. | Unknown mix of real findings and remaining heuristic noise. Both are `(heuristic)`-labelled rules. Worth a look only if either starts feeling untrustworthy in daily use. |
+| D2 | **No automated parity harness against the old Nushell hook.** | Its value dropped once the divergences were catalogued: three of the four are *deliberate* improvements (`note:` lines kept, colon paths parsed, missing-zsnag reported), and the accidental one (missing dedup) is now fixed and unit-tested. A harness would mostly assert the deliberate differences. |
+| D3 | `R012`'s single hit on std — `lib/std/debug/cpu_context.zig:51` calls `std.mem.reverse(native.r[0..])` with one argument against a two-parameter signature — **is a real bug in Zig's standard library** and has not been reported upstream. | It sits in a comptime-dead loongarch64 branch, so it never compiles in practice. Still a genuine defect, and the first concrete instance of the "give back to Zig" goal below. |
+| D4 | `@intCast` advisories (R007) remain on two guarded casts in `src/`. | Both are range-checked on the line above. Suppressing them would hide the rule's only true signal; leaving them costs two lines of output. |
+
+### Checking this tool without reading its source
+
+The most valuable technique in the 2026-08-10 audit was **counting against a large body of
+known-good code** rather than reasoning about correctness. Zig's own standard library is 550
+files that are, by definition, correct.
+
+```sh
+STD=$(zig env | grep -oP '\.std_dir\s*=\s*"\K[^"]+')
+cd "$STD" && find . -name '*.zig' -print0 \
+  | xargs -0 -n 150 "$ZCANON_HOME/zig-out/bin/zsnag" 2>/dev/null \
+  | grep -oP '\[R\d+ (error|warn|info)\]' | sort | uniq -c | sort -rn
+```
+
+**A raw total is the wrong metric** — most rules fire legitimately on std, and reading the
+total as "false positives" would be exactly the kind of unsupported claim this audit existed to
+catch. Split the rules by what a hit actually means:
+
+| Rule | Baseline 2026-08-10 | A hit on std means |
+|---|---|---|
+| **R001** async/await | **0** | **a bug in zsnag.** Modern std cannot contain stale keyword syntax. Must stay 0. |
+| **R012** arity | **1** | **a bug somewhere.** This one is real — see D3. Should stay ≈0. |
+| **R013** unknown path | **3** (opt-in) | **a gap in the zephem map**, since std by definition contains every std path. |
+| R008 acquire | 10 | heuristic — mixed. Watch the number; a jump means a regression. |
+| R006 stream | 7 | heuristic, never triaged. Same. |
+| R011 deprecated | 409 | **correct.** std has not migrated its own call sites off its own deprecated APIs. |
+| R004 / R005 | 328 / 131 | **correct.** std really does use `catch unreachable` and empty `catch {}`. |
+| R007 / R010 / R009 | 3542 / 44 / 12 | advisory by design; std casts, prints and uses `page_allocator` constantly. |
+
+So: **R001, R012 and R013 are the honesty check** — they claim something is impossible or absent,
+so a hit is a defect in the tool, in Zig, or in the map. The heuristics (R006, R008) are watched
+for movement, not for zero. The rest are working as designed and their counts mean nothing.
+
+Two habits from the same audit, worth keeping:
+
+- **Measure, do not assert.** Every claim made from a small sample during the port turned out
+  false in general ("byte-identical parity", "R012 fires zero times", "R013 is low-noise") —
+  each was true of the handful of files actually tested. Sample size is the question to ask.
+  This table itself is a case in point: the first version of it quoted "11 findings" because it
+  counted only four rules, and would have read as a 400× regression the moment anyone ran the
+  real command.
+- **Prove a fix by deleting the workaround, not by adding a test.** B1/B10 were proven fixed by
+  removing the `zsnag:ok` suppressions they had forced into `src/book.zig` and
+  `src/test/settings_test.zig` and requiring the tree to lint clean without them. A test written
+  to match one's own fix proves much less.
+
+Two habits from the same audit, worth keeping:
+
+- **Measure, do not assert.** Every claim made from a small sample during the port turned out
+  false in general ("byte-identical parity", "R012 fires zero times", "R013 is low-noise") —
+  each was true of the handful of files actually tested. Sample size is the question to ask.
+- **Prove a fix by deleting the workaround, not by adding a test.** B1/B10 were proven fixed by
+  removing the `zsnag:ok` suppressions they had forced into `src/book.zig` and
+  `src/test/settings_test.zig` and requiring the tree to lint clean without them. A test written
+  to match one's own fix proves much less.
+
 **Stretch — give back to Zig**
 The book accumulates data on which mistakes are most common and where the compiler's error
 messages are cryptic. That is a concrete, grounded contribution to the Zig project:
