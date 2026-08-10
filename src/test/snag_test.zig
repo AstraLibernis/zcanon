@@ -1,0 +1,195 @@
+const std = @import("std");
+const testing = std.testing;
+const snag = @import("zcanon").snag;
+
+fn scan(gpa: std.mem.Allocator, src: [:0]const u8, out: *std.ArrayList(snag.Finding)) !void {
+    try snag.scan(gpa, "t.zig", src, out);
+}
+
+fn codes(gpa: std.mem.Allocator, src: [:0]const u8) ![]const []const u8 {
+    var out: std.ArrayList(snag.Finding) = .empty;
+    try scan(gpa, src, &out);
+    var list: std.ArrayList([]const u8) = .empty;
+    for (out.items) |f| try list.append(gpa, f.rule().code);
+    return list.items;
+}
+
+fn has(list: []const []const u8, code: []const u8) bool {
+    for (list) |c| if (std.mem.eql(u8, c, code)) return true;
+    return false;
+}
+
+// ---- the registry ---------------------------------------------------------
+
+test "every rule has a unique code, a severity and a message" {
+    var seen: std.ArrayList([]const u8) = .empty;
+    defer seen.deinit(testing.allocator);
+    for (snag.rules) |r| {
+        try testing.expect(r.code.len == 4);
+        try testing.expectEqual(@as(u8, 'R'), r.code[0]);
+        try testing.expect(r.msg.len > 0);
+        try testing.expect(!has(seen.items, r.code));
+        try seen.append(testing.allocator, r.code);
+    }
+    // 10 built-in rules + 3 map-backed (R011 deprecated, R012 arity, R013 unknown).
+    try testing.expectEqual(@as(usize, 13), snag.rules.len);
+}
+
+test "the enum and the table agree" {
+    // directEnumArray indexes by the enum, so a mismatch is a compile error; this pins the
+    // ordering that --list-rules and the ledger refer to.
+    try testing.expectEqualStrings("R001", snag.ruleOf(.r001_async).code);
+    try testing.expectEqualStrings("R008", snag.ruleOf(.r008_acquire).code);
+    try testing.expectEqualStrings("R010", snag.ruleOf(.r010_debug_print).code);
+}
+
+// ---- individual rules (ported from the deleted nu/test.nu) ----------------
+
+test "R001 flags bare async/await but not method calls" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    try testing.expect(has(try codes(a.allocator(), "const x = async foo();"), "R001"));
+    try testing.expect(!has(try codes(a.allocator(), "const x = handle.async();"), "R001"));
+    try testing.expect(!has(try codes(a.allocator(), "const x = h.await();"), "R001"));
+}
+
+test "R003 flags mem.copy/mem.set only after a mem. qualifier" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    try testing.expect(has(try codes(a.allocator(), "std.mem.copy(u8, d, s);"), "R003"));
+    try testing.expect(has(try codes(a.allocator(), "std.mem.set(u8, d, 0);"), "R003"));
+    // A `set` that is not mem.set must not fire.
+    try testing.expect(!has(try codes(a.allocator(), "map.set(k, v);"), "R003"));
+}
+
+test "R007 does not fire on a cast used directly as an index" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    try testing.expect(has(try codes(a.allocator(), "const n: u8 = @intCast(x);"), "R007"));
+    try testing.expect(!has(try codes(a.allocator(), "const v = buf[@intCast(i)];"), "R007"));
+}
+
+test "R008 is satisfied by a matching deinit or close" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const leaked = "var l = std.ArrayList(u8).init(gpa);\n";
+    const released = "var l = std.ArrayList(u8).init(gpa);\ndefer l.deinit();\n";
+    try testing.expect(has(try codes(a.allocator(), leaked), "R008"));
+    try testing.expect(!has(try codes(a.allocator(), released), "R008"));
+
+    const f_leaked = "const f = try dir.openFile(p, .{});\n";
+    const f_closed = "const f = try dir.openFile(p, .{});\ndefer f.close();\n";
+    try testing.expect(has(try codes(a.allocator(), f_leaked), "R008"));
+    try testing.expect(!has(try codes(a.allocator(), f_closed), "R008"));
+}
+
+// ---- suppression ----------------------------------------------------------
+
+test "zsnag:ok silences only the finding's own line" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const src =
+        \\std.debug.print("a", .{}); // zsnag:ok
+        \\std.debug.print("b", .{});
+        \\
+    ;
+    var out: std.ArrayList(snag.Finding) = .empty;
+    try scan(a.allocator(), src, &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expectEqual(@as(u32, 2), out.items[0].line);
+}
+
+test "zsnag:allow silences a rule file-wide" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const src =
+        \\// zsnag:allow R010
+        \\std.debug.print("a", .{});
+        \\std.debug.print("b", .{});
+        \\
+    ;
+    try testing.expect(!has(try codes(a.allocator(), src), "R010"));
+}
+
+test "more than 32 allow codes are all honoured (B4)" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    var src: std.ArrayList(u8) = .empty;
+    // A long allow line: many repeats, with R010 last so it lands well past the old cap.
+    try src.appendSlice(a.allocator(), "// zsnag:allow");
+    for (0..60) |_| try src.appendSlice(a.allocator(), " R999");
+    try src.appendSlice(a.allocator(), " R010\n");
+    try src.appendSlice(a.allocator(), "std.debug.print(\"a\", .{});\n");
+    const z = try a.allocator().dupeZ(u8, src.items);
+
+    var out: std.ArrayList(snag.Finding) = .empty;
+    try scan(a.allocator(), z, &out);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
+}
+
+// ---- output ---------------------------------------------------------------
+
+test "findings come out sorted by position" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const src =
+        \\var l = std.ArrayList(u8).init(gpa);
+        \\std.debug.print("x", .{});
+        \\const y = foo() catch unreachable;
+        \\
+    ;
+    var out: std.ArrayList(snag.Finding) = .empty;
+    try scan(a.allocator(), src, &out);
+    try testing.expect(out.items.len >= 3);
+    for (out.items[1..], out.items[0 .. out.items.len - 1]) |cur, prev| {
+        try testing.expect(prev.line < cur.line or (prev.line == cur.line and prev.col <= cur.col));
+    }
+}
+
+test "JSON output escapes quotes and backslashes in the path (B2)" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+
+    var out: std.ArrayList(snag.Finding) = .empty;
+    try snag.scan(gpa, "we\"ird\\path.zig", "std.debug.print(\"x\", .{});\n", &out);
+
+    var w: std.Io.Writer.Allocating = .init(gpa);
+    try snag.renderJson(&w.writer, out.items);
+
+    // Must re-parse as real JSON with the path intact.
+    const line = std.mem.trimEnd(u8, w.written(), "\n");
+    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, line, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings("we\"ird\\path.zig", parsed.value.object.get("file").?.string);
+    try testing.expectEqualStrings("R010", parsed.value.object.get("rule").?.string);
+}
+
+test "anyError is true only for error-severity findings" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+
+    var errs: std.ArrayList(snag.Finding) = .empty;
+    try scan(a.allocator(), "usingnamespace foo;", &errs);
+    try testing.expect(snag.anyError(errs.items));
+
+    var infos: std.ArrayList(snag.Finding) = .empty;
+    try scan(a.allocator(), "std.debug.print(\"x\", .{});", &infos);
+    try testing.expect(infos.items.len > 0);
+    try testing.expect(!snag.anyError(infos.items));
+}
+
+test "clean source produces nothing" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const src =
+        \\const std = @import("std");
+        \\pub fn add(x: u8, y: u8) u8 {
+        \\    return x + y;
+        \\}
+        \\
+    ;
+    var out: std.ArrayList(snag.Finding) = .empty;
+    try scan(a.allocator(), src, &out);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
+}

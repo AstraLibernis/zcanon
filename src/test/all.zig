@@ -1,0 +1,11 @@
+//! Test aggregator. Tests live out-of-line here, one `<mod>_test.zig` per module, so the
+//! modules themselves stay lean. `zig build test` compiles this root.
+test {
+    _ = @import("tier_test.zig");
+    _ = @import("book_test.zig");
+    _ = @import("settings_test.zig");
+    _ = @import("hook_test.zig");
+    _ = @import("report_test.zig");
+    _ = @import("snag_test.zig");
+    _ = @import("zephem_test.zig");
+}
