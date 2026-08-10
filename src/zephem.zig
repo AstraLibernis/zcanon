@@ -1,10 +1,12 @@
 //! Reader over the companion zephem std map, so zsnag's advice is *derived from the
 //! installed std* rather than recalled from a string literal.
 //!
-//! It reads zephem's TSVs directly instead of shelling out to the binary, deliberately:
-//! zephem's query commands have no JSON mode, always exit 0 (a hit, a miss, and "no map at
-//! all" are indistinguishable by exit code), and truncate doc/resolved text by raw byte
-//! slice. The TSVs are the actual source of truth and their schema is a stated contract.
+//! It reads zephem's TSVs directly instead of shelling out to the binary, deliberately.
+//! The original reasons were: no JSON mode, every query exited 0, and lossy byte-slice
+//! truncation. The exit codes and truncation were FIXED upstream on 2026-08-10 (0 hit /
+//! 1 miss / 2 usage / 3 unavailable; error sets emitted whole) — but the TSVs remain the
+//! actual source of truth with a stated schema contract, there is still no JSON mode, and
+//! an in-process read costs nothing per query, so direct reads remain the right choice.
 //!
 //! NEVER shell out to `zephem <sub>` with pass-through flags: unknown flags fall through to
 //! the subcommand's action, so `zephem std --help` performs a full map regeneration and
@@ -202,39 +204,119 @@ pub fn isDeprecated(doc: []const u8) bool {
     return doc.len >= 10 and std.ascii.startsWithIgnoreCase(doc, "deprecated");
 }
 
+/// Strip inline `///` parameter-doc prose from a signature.
+///
+/// This is the rule zephem itself now applies at display time, ported (zcanon cannot import
+/// zephem as a module). It replaced a cruder in-place guess here that an adversarial audit
+/// proved wrong on 17 of the 68 affected signatures — `std.Io.Dir.readFileAlloc` (5 params)
+/// counted as 3, `AstGen.GenZir.addParam` (7) as 2, and 8 more fell out as "unbalanced".
+/// The rule: on `///` at depth d, take the first `:` at depth d not followed by `//` (a URL)
+/// with no further `///` before its segment ends; walk back over the identifier and any
+/// `comptime`/`noalias` qualifiers. Validated 68/68 against ground truth read from the
+/// compiler's own source.
+fn stripParamDocs(gpa: std.mem.Allocator, sig: []const u8) ?[]u8 {
+    if (std.mem.find(u8, sig, "///") == null) return null; // clean — caller uses sig as-is
+    var out: std.ArrayList(u8) = .empty;
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < sig.len) {
+        if (i + 2 < sig.len and sig[i] == '/' and sig[i + 1] == '/' and sig[i + 2] == '/') {
+            if (docParamStart(sig, i, depth)) |ps| {
+                i = ps;
+                continue;
+            }
+        }
+        switch (sig[i]) {
+            '(', '[', '{' => depth += 1,
+            ')', ']', '}' => depth -|= 1,
+            else => {},
+        }
+        out.append(gpa, sig[i]) catch {
+            out.deinit(gpa);
+            return null;
+        };
+        i += 1;
+    }
+    return out.toOwnedSlice(gpa) catch {
+        out.deinit(gpa);
+        return null;
+    };
+}
+
+fn docParamStart(s: []const u8, doc_start: usize, d: usize) ?usize {
+    var dep = d;
+    var k = doc_start + 3;
+    while (k < s.len) : (k += 1) {
+        const ch = s[k];
+        if (ch == ':' and dep == d and !(k + 2 < s.len and s[k + 1] == '/' and s[k + 2] == '/')) {
+            var dep2 = dep;
+            var m = k + 1;
+            var seg_end = s.len;
+            while (m < s.len) : (m += 1) {
+                switch (s[m]) {
+                    '(', '[', '{' => dep2 += 1,
+                    ')', ']', '}' => {
+                        if (dep2 == d) {
+                            seg_end = m;
+                            break;
+                        }
+                        dep2 -= 1;
+                    },
+                    ',' => if (dep2 == d) {
+                        seg_end = m;
+                        break;
+                    },
+                    else => {},
+                }
+            }
+            if (std.mem.find(u8, s[k..seg_end], "///") == null) return backToParam(s, k);
+        }
+        switch (ch) {
+            '(', '[', '{' => dep += 1,
+            ')', ']', '}' => dep -|= 1,
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn backToParam(s: []const u8, colon: usize) ?usize {
+    var e = colon;
+    while (e > 0 and s[e - 1] == ' ') e -= 1;
+    var st = e;
+    while (st > 0 and (std.ascii.isAlphanumeric(s[st - 1]) or s[st - 1] == '_')) st -= 1;
+    if (st == e) return null;
+    while (true) {
+        var pp = st;
+        while (pp > 0 and s[pp - 1] == ' ') pp -= 1;
+        var q = pp;
+        while (q > 0 and (std.ascii.isAlphanumeric(s[q - 1]) or s[q - 1] == '_')) q -= 1;
+        const w = s[q..pp];
+        if (q < pp and (std.mem.eql(u8, w, "comptime") or std.mem.eql(u8, w, "noalias"))) st = q else break;
+    }
+    return st;
+}
+
 /// Declared parameter count of a `fn name(a: T, b: U) R` signature — the number of non-empty
 /// comma-separated segments in the FIRST parameter list. Returns null when `sig` is not a
 /// function signature.
 ///
-/// Counting commas alone is wrong: std wraps long signatures and leaves a TRAILING comma,
-/// e.g. `fn parseFromSliceLeaky( comptime T: type, allocator: Allocator, s: []const u8,
-/// options: ParseOptions, )` — four parameters, four commas. Empty segments are not counted.
-pub fn arityOf(sig: []const u8) ?usize {
+/// Prose is stripped FIRST (see stripParamDocs): counting through it is how a two-parameter
+/// function read as three (B16), and the in-place skip that replaced it was wrong on 17 of 68.
+pub fn arityOf(gpa: std.mem.Allocator, sig: []const u8) ?usize {
+    if (stripParamDocs(gpa, sig)) |clean| {
+        defer gpa.free(clean);
+        return arityOfClean(clean);
+    }
+    return arityOfClean(sig);
+}
+
+fn arityOfClean(sig: []const u8) ?usize {
     const open = std.mem.findScalar(u8, sig, '(') orelse return null;
     var depth: usize = 0;
     var params: usize = 0;
     var seen: bool = false; // content in the current segment
-    var in_doc = false; // inside an inline `///` comment
-    var i: usize = open;
-    while (i < sig.len) : (i += 1) {
-        const ch = sig[i];
-
-        // zephem stores `///` doc text INLINE in the signature, and that prose contains
-        // commas: `fn init( /// … If these functions are avoided, then `Allocator.failing`
-        // may be passed … gpa: Allocator, options: InitOptions, )` is TWO parameters. Counting
-        // through the prose reported three. 65 std signatures carry a comma inside doc text.
-        if (!in_doc and ch == '/' and i + 2 < sig.len and sig[i + 1] == '/' and sig[i + 2] == '/') {
-            in_doc = true;
-            i += 2;
-            continue;
-        }
-        if (in_doc) {
-            // The doc run ends at the next `///` or at the parameter that follows it. A
-            // parameter is `name: Type`, so a `:` at depth 1 closes the prose.
-            if (ch == ':' and depth == 1) in_doc = false;
-            if (ch == ')' and depth == 1) in_doc = false else continue;
-        }
-
+    for (sig[open..]) |ch| {
         switch (ch) {
             '(', '[', '{' => {
                 depth += 1;

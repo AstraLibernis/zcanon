@@ -1,5 +1,13 @@
 # Upstream audit: zephem's CLI, query commands, and `sig` column
 
+> **STATUS 2026-08-10: findings fixed upstream** in zephem commits `9611278` → `b91a85d`,
+> after two adversarial re-audits of the first fix found it incomplete (missing-value flags
+> still ran destructive defaults; three subcommands unhardened; `map` could never return 3;
+> the member count was wrong on 66% of annotated rows; and the reverted `///` splitter was
+> proven viable at 68/68 against source-derived ground truth, so it was reinstated).
+> This document is kept as the record of the findings as they stood. Details: zephem's
+> commit messages and zcanon's PLAN.md ledger (B16, B24).
+
 **Scope, and what was deliberately left out.** Three layers were audited, on 2026-08-10:
 argument handling across every subcommand, the read-only query commands (`look`, `map`), and
 the shape of the `sig` column. **zephem was not modified** — this is findings only.

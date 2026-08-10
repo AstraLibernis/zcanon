@@ -8,4 +8,5 @@ test {
     _ = @import("report_test.zig");
     _ = @import("snag_test.zig");
     _ = @import("zephem_test.zig");
+    _ = @import("oracle_arity_test.zig");
 }

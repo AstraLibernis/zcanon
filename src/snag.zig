@@ -673,7 +673,7 @@ fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const 
 
         // R012 — arity, only for a direct call on the resolved path.
         if (j < t.len and t[j].tag == .l_paren) {
-            if (zephem.arityOf(e.sig)) |want| {
+            if (zephem.arityOf(gpa, e.sig)) |want| {
                 const got = countArgs(t, j);
                 if (got != null and got.? != want) {
                     const msg = try std.fmt.allocPrint(

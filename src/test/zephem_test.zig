@@ -5,11 +5,11 @@ const zephem = @import("zcanon").zephem;
 // ---- arity, the part that got it wrong first ------------------------------
 
 test "arity counts parameters, not commas" {
-    try testing.expectEqual(@as(?usize, 0), zephem.arityOf("fn cwd() Dir"));
-    try testing.expectEqual(@as(?usize, 1), zephem.arityOf("fn ArrayList(comptime T: type) type"));
+    try testing.expectEqual(@as(?usize, 0), zephem.arityOf(testing.allocator_instance.allocator(), "fn cwd() Dir"));
+    try testing.expectEqual(@as(?usize, 1), zephem.arityOf(testing.allocator_instance.allocator(), "fn ArrayList(comptime T: type) type"));
     try testing.expectEqual(
         @as(?usize, 3),
-        zephem.arityOf("fn parseInt(comptime T: type, buf: []const u8, base: u8) ParseIntError!T"),
+        zephem.arityOf(testing.allocator_instance.allocator(), "fn parseInt(comptime T: type, buf: []const u8, base: u8) ParseIntError!T"),
     );
 }
 
@@ -18,7 +18,7 @@ test "a trailing comma in a wrapped signature is not an extra parameter" {
     const sig =
         "fn parseFromSliceLeaky( comptime T: type, allocator: Allocator, s: []const u8, " ++
         "options: ParseOptions, ) ParseError(Scanner)!T";
-    try testing.expectEqual(@as(?usize, 4), zephem.arityOf(sig));
+    try testing.expectEqual(@as(?usize, 4), zephem.arityOf(testing.allocator_instance.allocator(), sig));
 }
 
 test "arity ignores commas nested inside parameter types" {
@@ -26,11 +26,11 @@ test "arity ignores commas nested inside parameter types" {
     const sig =
         "fn sort( comptime T: type, items: []T, context: anytype, " ++
         "comptime lessThanFn: fn (@TypeOf(context), lhs: T, rhs: T) bool, ) void";
-    try testing.expectEqual(@as(?usize, 4), zephem.arityOf(sig));
+    try testing.expectEqual(@as(?usize, 4), zephem.arityOf(testing.allocator_instance.allocator(), sig));
 
     const sig2 = "fn directEnumArray( comptime E: type, comptime Data: type, " ++
         "comptime max_unused_slots: comptime_int, init_values: EnumFieldStruct(E, Data, null), ) [x]Data";
-    try testing.expectEqual(@as(?usize, 4), zephem.arityOf(sig2));
+    try testing.expectEqual(@as(?usize, 4), zephem.arityOf(testing.allocator_instance.allocator(), sig2));
 }
 
 test "arity ignores commas inside an inline doc comment" {
@@ -42,13 +42,13 @@ test "arity ignores commas inside an inline doc comment" {
         "/// * `Io.VTable.async` /// * `Io.VTable.concurrent` /// * `Io.VTable.groupAsync` " ++
         "/// * `Io.VTable.groupConcurrent` /// If these functions are avoided, then " ++
         "`Allocator.failing` may be passed /// here. gpa: Allocator, options: InitOptions, ) Threaded";
-    try testing.expectEqual(@as(?usize, 2), zephem.arityOf(sig));
+    try testing.expectEqual(@as(?usize, 2), zephem.arityOf(testing.allocator_instance.allocator(), sig));
 }
 
 test "arity is null for a non-signature or an unbalanced one" {
-    try testing.expectEqual(@as(?usize, null), zephem.arityOf(""));
-    try testing.expectEqual(@as(?usize, null), zephem.arityOf("const x = 1"));
-    try testing.expectEqual(@as(?usize, null), zephem.arityOf("fn broken(a: T"));
+    try testing.expectEqual(@as(?usize, null), zephem.arityOf(testing.allocator_instance.allocator(), ""));
+    try testing.expectEqual(@as(?usize, null), zephem.arityOf(testing.allocator_instance.allocator(), "const x = 1"));
+    try testing.expectEqual(@as(?usize, null), zephem.arityOf(testing.allocator_instance.allocator(), "fn broken(a: T"));
 }
 
 // ---- deprecation ----------------------------------------------------------
@@ -110,7 +110,7 @@ test "entry fields land in the right columns" {
     const e = m.get("std.fmt.parseInt").?;
     try testing.expectEqualStrings("fn", e.kind);
     try testing.expectEqualStrings("fn parseInt(comptime T: type, buf: []const u8, base: u8) E!T", e.sig);
-    try testing.expectEqual(@as(?usize, 3), zephem.arityOf(e.sig).?);
+    try testing.expectEqual(@as(?usize, 3), zephem.arityOf(testing.allocator_instance.allocator(), e.sig).?);
     try testing.expect(e.isPublic());
 }
 
