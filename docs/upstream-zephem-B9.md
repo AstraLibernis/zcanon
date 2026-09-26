@@ -1,6 +1,6 @@
 # Upstream: zephem silently ignores unknown flags, so `--help` runs the command
 
-**Status:** logged, not fixed. This is a defect in [zephem](https://codeberg.org/AstraLibernis/zephem),
+**Status:** logged, not fixed. This is a defect in [zephem](https://github.com/AstraLibernis/zephem),
 not in zcanon. Recorded here because zcanon consumes zephem's map and had to work around it.
 zcanon's ledger tracks it as **B9**.
 

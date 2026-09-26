@@ -9,7 +9,7 @@ compiler. It is plumbing: tools that put self-checks in front of the model right
 writes code. The model still does the writing and the reasoning; zcanon removes a class of
 sabotage — the small set of traps an LLM falls into repeatedly in a fast-moving language.
 
-> **Companion: [zephem](https://codeberg.org/AstraLibernis/zephem).** The *other* half of
+> **Companion: [zephem](https://github.com/AstraLibernis/zephem).** The *other* half of
 > writing correct Zig — looking **up** the real std API (names, signatures, resolved types)
 > so the model never writes them from memory — lives in zephem, which owns the std map and
 > its query layer (`zlook`/`zmap`) plus its own LLM skill. zcanon is the *footgun + edit-check*
@@ -45,7 +45,7 @@ real recurrences rather than repeated saves.
 ## Install
 
 ```sh
-git clone https://codeberg.org/AstraLibernis/zcanon.git
+git clone https://github.com/AstraLibernis/zcanon.git
 cd zcanon
 zig build                    # builds zig-out/bin/{zsnag,zcanon}
 zig build test               # unit tests + the end-to-end CLI tests
@@ -65,7 +65,7 @@ zig-out/bin/zcanon book files        # per-file roll-up
 zig-out/bin/zcanon book R004         # detail for one rule
 ```
 
-For **std lookup/discovery**, install the companion [zephem](https://codeberg.org/AstraLibernis/zephem)
+For **std lookup/discovery**, install the companion [zephem](https://github.com/AstraLibernis/zephem)
 and its skill — that's where the std map lives, queried with `zephem look` / `zephem map`.
 
 The hook is fully reversible: `zcanon disable` / `zcanon enable` toggle it with no settings

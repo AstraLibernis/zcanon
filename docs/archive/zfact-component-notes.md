@@ -39,7 +39,7 @@ Pass `--sig` (or `-s`) to print signatures only and suppress the cluster (hook m
 
 Layer A above is zero-dependency and exact, but answers only "I know the name." Layer B
 adds discovery — finding an API **by concept when you don't know its name** — by reading
-the **complete, verified std map** that [zephem](https://codeberg.org/AstraLibernis/zephem)
+the **complete, verified std map** that [zephem](https://github.com/AstraLibernis/zephem)
 extracts (every name, signature, and doc, as plain TSVs). It is a Nushell tool
 (`nu/zmap.nu`) because it reads files, not Zig source.
 
