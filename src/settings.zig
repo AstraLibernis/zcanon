@@ -5,6 +5,7 @@
 //! comment on the command string — the same convention the Nushell version used, so either
 //! implementation can uninstall the other's entry.
 const std = @import("std");
+const builtin = @import("builtin");
 const vars = @import("vars.zig");
 
 pub const MARKER = "zcanon-zig-hook";
@@ -15,7 +16,11 @@ const Value = std.json.Value;
 
 /// The command string written into settings.json, marker included.
 pub fn command(gpa: std.mem.Allocator, exe_path: []const u8) ![]u8 {
-    return std.fmt.allocPrint(gpa, "{s} hook  # {s}", .{ exe_path, MARKER });
+    const cmd = try std.fmt.allocPrint(gpa, "{s} hook  # {s}", .{ exe_path, MARKER });
+    // Windows: Claude Code runs hook commands through Git Bash, where an unquoted
+    // `C:\Users\...` loses every backslash. Forward slashes work in bash, cmd and PowerShell.
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, cmd[0..exe_path.len], '\\', '/');
+    return cmd;
 }
 
 fn isOurs(entry: Value) bool {

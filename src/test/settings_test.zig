@@ -158,6 +158,13 @@ test "command carries the marker" {
     try testing.expect(std.mem.startsWith(u8, cmd, "/opt/zcanon hook"));
 }
 
+test "command uses forward slashes on Windows, where hooks run through Git Bash" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    const cmd = try settings.command(testing.allocator, "C:\\Users\\me\\zcanon.exe");
+    defer testing.allocator.free(cmd);
+    try testing.expect(std.mem.startsWith(u8, cmd, "C:/Users/me/zcanon.exe hook"));
+}
+
 test "render round-trips through a re-parse" {
     var p = try parse(
         \\{"theme":"dark","permissions":{"allow":["a"]}}
