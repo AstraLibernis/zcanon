@@ -105,3 +105,7 @@ PLAN.md         how the pieces tie together + roadmap + bug ledger
 
 Verified against Zig 0.16.0, 2026-08-10. Pure Zig: no Nushell, no sqlite3, no database server —
 the book is one TSV. Std discovery/lookup lives in the companion zephem.
+
+## License
+
+MIT. See `LICENSE`.
