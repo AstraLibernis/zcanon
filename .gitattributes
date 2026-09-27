@@ -1,0 +1,4 @@
+# Keep LF everywhere, including Windows checkouts with core.autocrlf=true.
+# zephem/zcanon parse their own TSV data and fixtures byte-for-byte (and
+# verify SHA256SUMS), so a CRLF checkout breaks them.
+* text=auto eol=lf

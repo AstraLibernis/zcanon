@@ -49,7 +49,7 @@ pub const LoadError = error{
 /// Where zephem keeps the baked lookup table, using zephem's own precedence.
 pub fn lookupPath(c: vars.Ctx) ![]u8 {
     if (c.get("ZEPHEM_LOOKUP")) |p| return c.gpa.dupe(u8, p);
-    const home = c.get("HOME") orelse return error.HomeNotSet;
+    const home = try vars.home(c);
     return std.fs.path.join(c.gpa, &.{ home, ".config", "zephem", "lookup.tsv" });
 }
 

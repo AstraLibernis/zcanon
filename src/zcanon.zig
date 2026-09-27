@@ -2,11 +2,15 @@
 //! reader over the book. Replaces `nu/zhook.nu` + `nu/zbook.nu`; no `nu` and no `sqlite3`
 //! on the hook path.
 const std = @import("std");
+const builtin = @import("builtin");
 const vars = @import("vars.zig");
 const settings = @import("settings.zig");
 const hook = @import("hook.zig");
 const book = @import("book.zig");
 const report = @import("report.zig");
+
+/// The linter's file name beside this binary (Windows executables carry `.exe`).
+const zsnag_name = if (builtin.os.tag == .windows) "zsnag.exe" else "zsnag";
 
 const usage =
     \\zcanon <command> [args]
@@ -86,7 +90,7 @@ fn runHook(c: vars.Ctx) !void {
     // skipping silently — "no findings" must never be indistinguishable from "never checked".
     const self = try vars.selfExe(c);
     const bin_dir = std.fs.path.dirname(self) orelse ".";
-    const zsnag_path = try std.fs.path.join(c.gpa, &.{ bin_dir, "zsnag" });
+    const zsnag_path = try std.fs.path.join(c.gpa, &.{ bin_dir, zsnag_name });
 
     // Which rule groups actually ran. zsnag REPORTS this in its status record rather than
     // us inferring it from an exit code — inference is what let a failed zephem map load look
@@ -247,7 +251,7 @@ fn runStatus(c: vars.Ctx) !void {
 
     const self = try vars.selfExe(c);
     const bin_dir = std.fs.path.dirname(self) orelse ".";
-    const zsnag_path = try std.fs.path.join(c.gpa, &.{ bin_dir, "zsnag" });
+    const zsnag_path = try std.fs.path.join(c.gpa, &.{ bin_dir, zsnag_name });
     const book_path = try vars.bookPath(c);
 
     var buf: [2048]u8 = undefined;
