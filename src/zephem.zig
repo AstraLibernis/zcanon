@@ -48,7 +48,8 @@ pub const Entry = struct {
 pub const LoadError = error{
     NoLookupTable,
     ZephemNotFound,
-} || std.mem.Allocator.Error || std.Io.Dir.ReadFileAllocError;
+} || std.mem.Allocator.Error || std.Io.File.OpenError || std.Io.File.StatError ||
+    std.Io.File.MemoryMap.CreateError;
 
 /// Where zephem keeps the baked lookup table, using zephem's own precedence:
 /// `$ZEPHEM_LOOKUP`, else `data/lookup.tsv` inside the zephem checkout. (Before 2026-09-28 it
@@ -137,12 +138,20 @@ pub fn dataDir(c: vars.Ctx) !?[]u8 {
 
 pub const Map = struct {
     gpa: std.mem.Allocator,
+    /// Owned text (from `parse`); `load` leaves it empty and maps the file instead.
     text: []u8,
     index: std.StringHashMapUnmanaged(Entry),
+    mapped: ?Mapped = null,
+
+    const Mapped = struct { io: std.Io, file: std.Io.File, mm: std.Io.File.MemoryMap };
 
     pub fn deinit(m: *Map) void {
         m.index.deinit(m.gpa);
         m.gpa.free(m.text);
+        if (m.mapped) |*mp| {
+            mp.mm.destroy(mp.io);
+            mp.file.close(mp.io);
+        }
     }
 
     pub fn get(m: Map, path: []const u8) ?Entry {
@@ -183,20 +192,42 @@ pub fn load(c: vars.Ctx, wanted: ?*const Keys) LoadError!Map {
     const path = try lookupPath(c);
     defer c.gpa.free(path);
 
-    const text = std.Io.Dir.cwd().readFileAlloc(c.io, path, c.gpa, .unlimited) catch |e| switch (e) {
+    // Memory-mapped rather than read: copying 9.5 MB into fresh pages cost ~1.4 ms of system
+    // time per hook run, more than scanning it.
+    const file = std.Io.Dir.cwd().openFile(c.io, path, .{}) catch |e| switch (e) {
         error.FileNotFound => return error.NoLookupTable,
-        else => return e,
+        else => |x| return x,
     };
-    errdefer c.gpa.free(text);
-    return parse(c.gpa, text, wanted);
+    errdefer file.close(c.io);
+    const size = (try file.stat(c.io)).size;
+    if (size == 0) {
+        file.close(c.io);
+        return parse(c.gpa, &.{}, wanted);
+    }
+    var mm = try std.Io.File.MemoryMap.create(c.io, file, .{
+        .len = std.math.cast(usize, size) orelse return error.OutOfMemory,
+        .protection = .{ .read = true, .write = false },
+    });
+    errdefer mm.destroy(c.io);
+
+    var m = try index(c.gpa, mm.memory, wanted);
+    m.mapped = .{ .io = c.io, .file = file, .mm = mm };
+    return m;
 }
 
 /// Index an already-read lookup table. Split out from `load` so the parsing can be tested
 /// against a synthetic table without depending on the ambient environment.
 /// Takes ownership of `text`; entries slice into it.
 pub fn parse(gpa: std.mem.Allocator, text: []u8, wanted: ?*const Keys) !Map {
-    var index: std.StringHashMapUnmanaged(Entry) = .empty;
-    errdefer index.deinit(gpa);
+    var m = try index(gpa, text, wanted);
+    m.text = text;
+    return m;
+}
+
+/// Index `text` without taking ownership of it.
+fn index(gpa: std.mem.Allocator, text: []const u8, wanted: ?*const Keys) !Map {
+    var idx: std.StringHashMapUnmanaged(Entry) = .empty;
+    errdefer idx.deinit(gpa);
 
     var lines = std.mem.splitScalar(u8, text, '\n');
     var first = true;
@@ -219,7 +250,7 @@ pub fn parse(gpa: std.mem.Allocator, text: []u8, wanted: ?*const Keys) !Map {
             f[n] = field;
         }
         if (n < Col.count) continue;
-        try index.put(gpa, f[Col.path], .{
+        try idx.put(gpa, f[Col.path], .{
             .path = f[Col.path],
             .kind = f[Col.kind],
             .sig = f[Col.sig],
@@ -229,7 +260,7 @@ pub fn parse(gpa: std.mem.Allocator, text: []u8, wanted: ?*const Keys) !Map {
             .vis = f[Col.vis],
         });
     }
-    return .{ .gpa = gpa, .text = text, .index = index };
+    return .{ .gpa = gpa, .text = &.{}, .index = idx };
 }
 
 pub const remedy =

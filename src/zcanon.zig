@@ -126,9 +126,9 @@ fn runHook(c: vars.Ctx) !void {
     const files = try readAll(c, paths.items);
     var run = try Run.init(c, files);
     try addNotices(c.gpa, &notices, run.notices.items);
-    for (files) |f| {
+    for (files, 0..) |f, i| {
         const src = f.src orelse continue;
-        const a = try run.analyze(f.path, src);
+        const a = try run.analyze(i, f.path, src);
         if (try hook.renderContext(c.gpa, std.fs.path.basename(f.path), f.path, a.findings, view)) |b| {
             if (body.written().len > 0) try body.writer.writeAll("\n\n");
             try body.writer.writeAll(b);
@@ -234,25 +234,70 @@ const Analysis = struct {
     book_notice: []const u8,
 };
 
+/// A child process started now and collected later, so its run overlaps the in-process scan.
+/// Only one stream is piped, so reading it to the end cannot deadlock.
+const Pending = struct {
+    child: ?std.process.Child,
+    stream: enum { stdout, stderr },
+
+    fn start(c: vars.Ctx, argv: []const []const u8, stream: @FieldType(Pending, "stream")) Pending {
+        const child = std.process.spawn(c.io, .{
+            .argv = argv,
+            .stdin = .ignore,
+            .stdout = if (stream == .stdout) .pipe else .ignore,
+            .stderr = if (stream == .stderr) .pipe else .ignore,
+        }) catch null;
+        return .{ .child = child, .stream = stream };
+    }
+
+    const Done = struct { term: std.process.Child.Term, out: []u8 };
+
+    /// The child's exit and its piped output; null when it could not be started or read.
+    fn finish(p: *Pending, c: vars.Ctx) ?Done {
+        var child = p.child orelse return null;
+        p.child = null;
+        defer child.kill(c.io);
+        const file = (if (p.stream == .stdout) child.stdout else child.stderr) orelse return null;
+        var buf: [4096]u8 = undefined;
+        var r = file.readerStreaming(c.io, &buf);
+        const out = r.interface.allocRemaining(c.gpa, .unlimited) catch return null;
+        const term = child.wait(c.io) catch return null;
+        return .{ .term = term, .out = out };
+    }
+};
+
 /// State shared by every file one hook run or `zcanon check` looks at: the map, the rules the
 /// map has disabled, and the zig version, each computed once.
 ///
 /// The linter runs in-process. zcanon used to spawn zsnag per file and parse its JSONL back,
-/// which re-indexed the whole zephem lookup table for every file checked.
+/// which re-indexed the whole zephem lookup table for every file checked. `zig version` and
+/// each file's `zig ast-check` are started first and collected later, so they run while the
+/// map loads and the files are scanned.
 const Run = struct {
     c: vars.Ctx,
     map: ?zephem.Map,
     stale: []const snag.Id,
     zver: []const u8,
+    /// One `zig ast-check` per file, by index into the files given to `init`.
+    ast: []Pending,
     /// Why a check did not run, or ran against a stale map. "No findings" must never be
     /// indistinguishable from "never checked".
     notices: std.ArrayList([]const u8),
 
     fn init(c: vars.Ctx, files: []const File) !Run {
-        var r: Run = .{ .c = c, .map = null, .stale = &.{}, .zver = zigVersion(c), .notices = .empty };
+        var version = Pending.start(c, &.{ "zig", "version" }, .stdout);
+        const ast = try c.gpa.alloc(Pending, files.len);
+        for (files, ast) |f, *p| p.* = if (f.src != null)
+            Pending.start(c, &.{ "zig", "ast-check", f.path }, .stderr)
+        else
+            .{ .child = null, .stream = .stderr };
+
+        var r: Run = .{ .c = c, .map = null, .stale = &.{}, .zver = "unknown", .ast = ast, .notices = .empty };
         var keys: zephem.Keys = .empty;
         for (files) |f| if (f.src) |src| try snag.mapKeys(c.gpa, src, &keys);
-        if (zephem.load(c, &keys)) |m| {
+        const loaded = zephem.load(c, &keys);
+        if (version.finish(c)) |v| r.zver = std.mem.trim(u8, v.out, " \t\r\n");
+        if (loaded) |m| {
             r.map = m;
             if (try zephem.staleness(c, r.zver)) |warn|
                 try r.notices.append(c.gpa, try std.fmt.allocPrint(c.gpa, "\n\n{s}", .{warn}));
@@ -275,7 +320,7 @@ const Run = struct {
     }
 
     /// zsnag + `zig ast-check` on one file, deduped, sorted, and recorded to the book.
-    fn analyze(r: *Run, path: []const u8, src: [:0]const u8) !Analysis {
+    fn analyze(r: *Run, i: usize, path: []const u8, src: [:0]const u8) !Analysis {
         const c = r.c;
         var findings: std.ArrayList(hook.Finding) = .empty;
 
@@ -300,13 +345,13 @@ const Run = struct {
             .message = f.msg,
         });
 
-        if (std.process.run(c.gpa, c.io, .{ .argv = &.{ "zig", "ast-check", path } }) catch null) |res| {
+        if (r.ast[i].finish(c)) |res| {
             // Only a normal exit counts. A killed or signalled ast-check produces no diagnostics,
             // and treating that as "ran" erased the file's whole ast history from the book.
             switch (res.term) {
                 .exited => {
                     try active.append(c.gpa, book.GROUP_AST);
-                    try hook.parseAstCheck(c.gpa, path, res.stderr, &findings);
+                    try hook.parseAstCheck(c.gpa, path, res.out, &findings);
                 },
                 else => {},
             }
@@ -352,13 +397,13 @@ fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
     var run = try Run.init(c, files);
     for (run.notices.items) |n| try w.interface.print("{s}\n", .{std.mem.trimStart(u8, n, "\n")});
     var hint = false;
-    for (files) |f| {
+    for (files, 0..) |f, i| {
         const src = f.src orelse {
             try w.interface.print("{s}: cannot read file\n", .{f.path});
             unreadable = true;
             continue;
         };
-        const a = try run.analyze(f.path, src);
+        const a = try run.analyze(i, f.path, src);
         for (a.findings) |finding| {
             if (tier.classify(finding.severity, f.path) == .blocking) blocking = true;
         }
@@ -421,11 +466,6 @@ fn writeBook(c: vars.Ctx, b: *const book.Book, path: []const u8) !void {
     var w: std.Io.Writer.Allocating = .init(c.gpa);
     try b.write(&w.writer);
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = w.written() });
-}
-
-fn zigVersion(c: vars.Ctx) []const u8 {
-    const r = std.process.run(c.gpa, c.io, .{ .argv = &.{ "zig", "version" } }) catch return "unknown";
-    return std.mem.trim(u8, r.stdout, " \t\r\n");
 }
 
 // ---- management -----------------------------------------------------------
