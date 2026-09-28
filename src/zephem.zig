@@ -47,14 +47,17 @@ pub const Entry = struct {
 
 pub const LoadError = error{
     NoLookupTable,
-    HomeNotSet,
+    ZephemNotFound,
 } || std.mem.Allocator.Error || std.Io.Dir.ReadFileAllocError;
 
-/// Where zephem keeps the baked lookup table, using zephem's own precedence.
+/// Where zephem keeps the baked lookup table, using zephem's own precedence:
+/// `$ZEPHEM_LOOKUP`, else `data/lookup.tsv` inside the zephem checkout. (Before 2026-09-28 it
+/// was `~/.config/zephem/lookup.tsv`; zephem moved it into the repo so nothing it generates
+/// lives outside its own folder.)
 pub fn lookupPath(c: vars.Ctx) ![]u8 {
     if (c.get("ZEPHEM_LOOKUP")) |p| return c.gpa.dupe(u8, p);
-    const home = try vars.home(c);
-    return std.fs.path.join(c.gpa, &.{ home, ".config", "zephem", "lookup.tsv" });
+    const home = locateHome(c) orelse return error.ZephemNotFound;
+    return std.fs.path.join(c.gpa, &.{ home.path, "data", "lookup.tsv" });
 }
 
 /// How a zephem checkout was found — reported by `zcanon doctor` so a wrong guess is visible.

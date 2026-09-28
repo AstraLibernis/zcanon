@@ -103,8 +103,26 @@ zig build test                       # unit tests + the end-to-end CLI tests
 ```
 
 `zcanon disable` / `zcanon enable` switch the hook off and on without touching settings;
-`zcanon uninstall` removes only zcanon's entry; `zcanon prune` drops findings for files that no
-longer exist.
+`zcanon prune` drops findings for files that no longer exist.
+
+### Uninstall
+
+```sh
+zig-out/bin/zcanon uninstall            # remove the hook and the skill, keep your book of findings
+zig-out/bin/zcanon uninstall --purge    # also delete ~/.config/zcanon (the book, zephem's location)
+```
+
+It removes only what `setup` put outside the checkout, then re-reads everything to confirm it is
+gone:
+
+| Where | What | Removed by |
+|---|---|---|
+| `~/.claude/settings.json` | zcanon's hook entry only; your other settings and hooks are untouched | `uninstall` |
+| `~/.claude/skills/zcanon/` | the skill, and `SKILL.md.bak` if setup made one (only if they are zcanon skills) | `uninstall` |
+| `~/.config/zcanon/` | the book of findings and the recorded zephem location | `uninstall --purge` |
+
+It leaves `settings.json.bak` (a copy of your own settings) and never touches zephem, which is
+its own project. Then delete the zcanon folder, and restart any open Claude Code session.
 
 **Windows:** the same commands work in PowerShell with `zig-out\bin\zcanon.exe`. Claude Code
 runs hooks through Git Bash there, so the installed command uses forward slashes and quotes

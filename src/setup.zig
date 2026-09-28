@@ -27,7 +27,7 @@ const zephem = @import("zephem.zig");
 
 pub const Mode = enum { setup, doctor };
 
-const Mark = enum { ok, fixed, fail, info };
+const Mark = enum { ok, fixed, removed, fail, info };
 
 const Report = struct {
     w: *std.Io.Writer,
@@ -36,17 +36,18 @@ const Report = struct {
     fn line(r: *Report, m: Mark, comptime fmt: []const u8, args: anytype) !void {
         if (m == .fail) r.failed = true;
         try r.w.writeAll(switch (m) {
-            .ok => "  [ok]     ",
-            .fixed => "  [fixed]  ",
-            .fail => "  [FAIL]   ",
-            .info => "  [info]   ",
+            .ok => "  [ok]      ",
+            .fixed => "  [fixed]   ",
+            .removed => "  [removed] ",
+            .fail => "  [FAIL]    ",
+            .info => "  [info]    ",
         });
         try r.w.print(fmt ++ "\n", args);
     }
 
     /// The exact next step, under a [FAIL].
     fn todo(r: *Report, comptime fmt: []const u8, args: anytype) !void {
-        try r.w.print("           -> " ++ fmt ++ "\n", args);
+        try r.w.print("            -> " ++ fmt ++ "\n", args);
     }
 
     fn phase(r: *Report, title: []const u8) !void {
@@ -156,7 +157,7 @@ fn phaseZephem(c: vars.Ctx, r: *Report, mode: Mode) !bool {
             try r.todo("cd {s} && zig build", .{home.path});
             return false;
         }
-        try r.w.print("           building zephem (zig build in {s}) ...\n", .{home.path});
+        try r.w.print("            building zephem (zig build in {s}) ...\n", .{home.path});
         try r.w.flush();
         if (!try runIn(c, r, home.path, &.{ "zig", "build" })) return false;
         try r.line(.fixed, "built zephem", .{});
@@ -172,11 +173,7 @@ fn phaseZephem(c: vars.Ctx, r: *Report, mode: Mode) !bool {
     }
     try r.line(.ok, "map is pinned to zig {s}", .{zv});
 
-    const lp = zephem.lookupPath(c) catch {
-        try r.line(.fail, "HOME is not set, so the lookup table has no location", .{});
-        try r.todo("set HOME, or ZEPHEM_LOOKUP to the lookup table's path", .{});
-        return false;
-    };
+    const lp = try zephem.lookupPath(c); // zephem was located above, so this cannot miss
     if (!exists(c, lp)) {
         if (mode == .doctor) {
             try r.line(.fail, "lookup table missing ({s})", .{lp});
@@ -363,7 +360,7 @@ fn liveTest(c: vars.Ctx, r: *Report, sp: []const u8, mode: Mode) !void {
     try r.line(if (core) .ok else .fail, "live test: core rules (R001-R010) {s}", .{if (core) "fired" else "did NOT fire"});
     try r.line(if (map) .ok else .fail, "live test: zephem map rules (R011-R013) {s}", .{if (map) "fired" else "did NOT fire"});
     if (!map) try r.todo("{s}", .{if (core)
-        "the hook cannot load the lookup table; check phase 1 and that HOME is set for Claude Code"
+        "the hook cannot load the lookup table; check phase 1 above"
     else
         "the map rules run inside zsnag, and zsnag itself did not run; fix that first"});
     try r.line(if (ast) .ok else .fail, "live test: zig ast-check {s}", .{if (ast) "ran" else "did NOT run"});
@@ -533,4 +530,123 @@ fn lastLines(s: []const u8, n: usize) []const u8 {
         }
     }
     return s;
+}
+
+// ---- uninstall --------------------------------------------------------------
+
+/// `zcanon uninstall [--purge]`: undo everything `setup` put outside the checkout, then check
+/// it is really gone.
+///   - the hook entry in Claude Code's settings.json (only ours; everything else untouched)
+///   - the installed skill, and the SKILL.md.bak setup made, if both are zcanon skills
+///   - with --purge: ~/.config/zcanon (the book of findings and the recorded zephem location)
+/// It never touches zephem, which is its own project, or the settings.json.bak backup, which is
+/// a copy of the user's own settings.
+pub fn uninstall(c: vars.Ctx, args: []const []const u8) !void {
+    var buf: [1 << 13]u8 = undefined;
+    var fw = std.Io.File.stdout().writer(c.io, &buf);
+    const w = &fw.interface;
+
+    var purge = false;
+    for (args) |a| {
+        if (std.mem.eql(u8, a, "--purge")) purge = true else {
+            try w.print("usage: zcanon uninstall [--purge]\n", .{});
+            try w.flush();
+            std.process.exit(2);
+        }
+    }
+
+    var r: Report = .{ .w = w };
+    try w.print("zcanon uninstall{s}\n", .{if (purge) " --purge" else ""});
+
+    // 1. The hook.
+    const sp = try vars.settingsPath(c);
+    if (exists(c, sp)) {
+        var root = settings.load(c, c.gpa, sp) catch |e| {
+            try r.line(.fail, "{s} is not valid JSON ({s}); not touching it", .{ sp, @errorName(e) });
+            try r.todo("fix it, then rerun; or remove the entry marked {s} by hand", .{settings.MARKER});
+            return finish(&r, w);
+        };
+        const n = try settings.removeOurs(c.gpa, &root);
+        if (n > 0) {
+            try settings.save(c, sp, try settings.render(c.gpa, root));
+            try r.line(.removed, "hook removed from {s} (backup: {s}.bak)", .{ sp, sp });
+        } else {
+            try r.line(.ok, "no hook in {s}", .{sp});
+        }
+        // Verify from disk, not from memory.
+        var check = try settings.load(c, c.gpa, sp);
+        if (settings.isInstalled(c.gpa, &check)) try r.line(.fail, "the hook is STILL in {s}", .{sp});
+    } else {
+        try r.line(.ok, "no Claude Code settings at {s}; nothing to remove", .{sp});
+    }
+
+    // 2. The skill (and setup's backup of an earlier zcanon skill).
+    try removeSkill(c, &r);
+
+    // 3. Local state.
+    const cfg = try vars.configDir(c);
+    if (purge) {
+        if (exists(c, cfg)) {
+            std.Io.Dir.cwd().deleteTree(c.io, cfg) catch |e| {
+                try r.line(.fail, "could not remove {s}: {s}", .{ cfg, @errorName(e) });
+            };
+            if (exists(c, cfg)) {
+                try r.line(.fail, "{s} is STILL there", .{cfg});
+            } else {
+                try r.line(.removed, "{s} (the book of findings and the recorded zephem location)", .{cfg});
+            }
+        } else {
+            try r.line(.ok, "no local state at {s}", .{cfg});
+        }
+    } else if (exists(c, cfg)) {
+        try r.line(.info, "kept {s} (your book of findings); `zcanon uninstall --purge` removes it", .{cfg});
+    }
+
+    try r.line(.info, "not touched: zephem (its own project) and the zcanon checkout itself; delete the folder to finish", .{});
+    return finish(&r, w);
+}
+
+fn removeSkill(c: vars.Ctx, r: *Report) !void {
+    const skill_path = vars.skillPath(c) catch {
+        try r.line(.info, "HOME is not set, so the skill's location is unknown; nothing removed there", .{});
+        return;
+    };
+    const bak = try std.fmt.allocPrint(c.gpa, "{s}.bak", .{skill_path});
+    for ([_][]const u8{ skill_path, bak }) |p| {
+        const text = std.Io.Dir.cwd().readFileAlloc(c.io, p, c.gpa, .limited(1 << 20)) catch continue;
+        if (!isZcanonSkill(text)) {
+            try r.line(.info, "left {s} alone: it is not a zcanon skill", .{p});
+            continue;
+        }
+        std.Io.Dir.cwd().deleteFile(c.io, p) catch |e| {
+            try r.line(.fail, "could not remove {s}: {s}", .{ p, @errorName(e) });
+            continue;
+        };
+        try r.line(.removed, "{s}", .{p});
+    }
+    if (std.fs.path.dirname(skill_path)) |dir| {
+        // Only if now empty; deleteDir refuses a non-empty directory.
+        std.Io.Dir.cwd().deleteDir(c.io, dir) catch {}; // zsnag:ok — non-empty means the user keeps it
+    }
+    if (exists(c, skill_path)) {
+        const text = std.Io.Dir.cwd().readFileAlloc(c.io, skill_path, c.gpa, .limited(1 << 20)) catch "";
+        if (isZcanonSkill(text)) try r.line(.fail, "the skill is STILL at {s}", .{skill_path});
+    }
+
+}
+
+fn finish(r: *Report, w: *std.Io.Writer) !void {
+    try w.writeAll(if (r.failed)
+        "\nNot fully removed. See the [FAIL] lines above.\n"
+    else
+        "\nzcanon is unhooked from Claude Code. Restart any open Claude Code session.\n");
+    try w.flush();
+    if (r.failed) std.process.exit(1);
+}
+
+/// A skill file whose frontmatter names it `zcanon`.
+fn isZcanonSkill(text: []const u8) bool {
+    if (!std.mem.startsWith(u8, text, "---")) return false;
+    const end = std.mem.find(u8, text[3..], "\n---") orelse return false;
+    return std.mem.find(u8, text[0 .. end + 3], "\nname: zcanon\n") != null;
 }

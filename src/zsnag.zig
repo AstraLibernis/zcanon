@@ -87,6 +87,7 @@ pub fn main(init: std.process.Init) !void {
             }
         } else |e| switch (e) {
             error.NoLookupTable => try stderr(io, "zsnag: R011/R012/R013 did NOT run — {s}\n", .{zephem.remedy}),
+            error.ZephemNotFound => try stderr(io, "zsnag: R011/R012/R013 did NOT run — zephem not found; run `zcanon setup`\n", .{}),
             else => try stderr(io, "zsnag: R011/R012/R013 did NOT run — {s}\n", .{@errorName(e)}),
         }
     }

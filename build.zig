@@ -60,12 +60,12 @@ pub fn build(b: *std.Build) void {
     // comes through here, where the build graph does have it.
     cli_opts.addOption([]const u8, "path_env", b.graph.environ_map.get("PATH") orelse "");
     cli_opts.addOption([]const u8, "zephem_home", b.graph.environ_map.get("ZEPHEM_HOME") orelse "");
-    // The setup tests run with HOME unset like every CLI test, so they are told where zephem's
-    // lookup table is. Empty when there is none; those tests then skip rather than fail.
-    const lookup: []const u8 = b.graph.environ_map.get("ZEPHEM_LOOKUP") orelse if (b.graph.environ_map.get("HOME")) |h|
-        b.pathJoin(&.{ h, ".config", "zephem", "lookup.tsv" })
+    // The setup tests need zephem's lookup table: $ZEPHEM_LOOKUP, else inside $ZEPHEM_HOME,
+    // else inside a zephem checkout beside this one. Missing → those tests skip, not fail.
+    const lookup: []const u8 = b.graph.environ_map.get("ZEPHEM_LOOKUP") orelse if (b.graph.environ_map.get("ZEPHEM_HOME")) |zh|
+        b.pathJoin(&.{ zh, "data", "lookup.tsv" })
     else
-        "";
+        b.pathFromRoot("../zephem/data/lookup.tsv");
     cli_opts.addOption([]const u8, "zephem_lookup", lookup);
     cli_mod.addOptions("build_options", cli_opts);
 

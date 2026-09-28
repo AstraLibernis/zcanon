@@ -18,11 +18,11 @@ const usage =
     \\
     \\  setup              check zephem + Claude Code, install the hook, then prove it works
     \\  doctor             the same checks as setup, changing nothing
-    \\  check <file>...    run the checks on files (for agents other than Claude Code);
-    \\                     exit 1 = something blocking
+    \\  check <file>...    run the hook's checks on files by hand; exit 1 = something blocking
     \\  hook               run as a PostToolUse hook (reads the payload on stdin)
-    \\  install            add the hook to Claude Code's settings.json (backs up first)
-    \\  uninstall          remove ONLY our entry; leave other settings intact
+    \\  install            add only the hook entry, unverified (prefer `setup`)
+    \\  uninstall [--purge] remove the hook and the skill (only ours), then verify;
+    \\                     --purge also deletes ~/.config/zcanon (the book)
     \\  status             is it installed, and is it enabled?
     \\  disable | enable   toggle at runtime without touching settings.json
     \\  book [report]      read the book: (default) | recent [N] | files | R0NN
@@ -49,7 +49,7 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "check")) return runCheck(c, rest);
     if (std.mem.eql(u8, cmd, "hook")) return runHook(c);
     if (std.mem.eql(u8, cmd, "install")) return runInstall(c);
-    if (std.mem.eql(u8, cmd, "uninstall")) return runUninstall(c);
+    if (std.mem.eql(u8, cmd, "uninstall")) return setup.uninstall(c, rest);
     if (std.mem.eql(u8, cmd, "status")) return runStatus(c);
     if (std.mem.eql(u8, cmd, "disable")) return setDisabled(c, true);
     if (std.mem.eql(u8, cmd, "enable")) return setDisabled(c, false);
@@ -282,18 +282,6 @@ fn runInstall(c: vars.Ctx) !void {
         "Installed into {s} (backup: {s}.bak).\nOff switch: zcanon disable   |   Full removal: zcanon uninstall\n",
         .{ path, path },
     );
-    try w.interface.flush();
-}
-
-fn runUninstall(c: vars.Ctx) !void {
-    const path = try vars.settingsPath(c);
-    var root = try settings.load(c, c.gpa, path);
-    const n = try settings.removeOurs(c.gpa, &root);
-    try settings.save(c, path, try settings.render(c.gpa, root));
-
-    var buf: [1024]u8 = undefined;
-    var w = stdout(c, &buf);
-    try w.interface.print("Removed {d} zcanon entr{s} from {s}.\n", .{ n, if (n == 1) "y" else "ies", path });
     try w.interface.flush();
 }
 

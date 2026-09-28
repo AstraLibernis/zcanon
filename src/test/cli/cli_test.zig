@@ -43,7 +43,7 @@ test "cli: uninstall removes only our entry" {
     _ = try s.zcanon(&.{"install"});
     const un = try s.zcanon(&.{"uninstall"});
     try testing.expectEqual(@as(u8, 0), un.code);
-    try testing.expect(un.outContains("Removed 1"));
+    try testing.expect(un.outContains("hook removed"));
 
     const text = try s.read("settings.json");
     try testing.expect(std.mem.find(u8, text, "zcanon-zig-hook") == null);
@@ -435,4 +435,53 @@ test "cli: check exits 1 on blocking findings, 0 when clean, 3 when unreadable" 
 
     const m = try s.zcanon(&.{ "check", try s.path("missing.zig") });
     try testing.expectEqual(@as(u8, 3), m.code);
+}
+
+test "cli: uninstall after setup removes the hook and skill, keeps the book; --purge removes it" {
+    var s = try box("uninstall-full");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    _ = try s.write("settings.json", "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"guard\"}]}]}}");
+    const r0 = try s.zcanonEnv(&.{"setup"}, &env);
+    try testing.expectEqual(@as(u8, 0), r0.code);
+    const dirty = try s.write("dirty.zig", dirty_zig);
+    _ = try s.zcanon(&.{ "check", dirty });
+    try testing.expect(s.exists("config/book.tsv"));
+
+    const u = try s.zcanonEnv(&.{"uninstall"}, &env);
+    try testing.expectEqual(@as(u8, 0), u.code);
+    const text = try s.read("settings.json");
+    try testing.expect(std.mem.find(u8, text, "zcanon-zig-hook") == null);
+    try testing.expect(std.mem.find(u8, text, "\"guard\"") != null);
+    try testing.expect(!s.exists("skills/zcanon/SKILL.md"));
+    try testing.expect(!s.exists("skills/zcanon"));
+    try testing.expect(s.exists("config/book.tsv"));
+
+    const p = try s.zcanonEnv(&.{ "uninstall", "--purge" }, &env);
+    try testing.expectEqual(@as(u8, 0), p.code);
+    try testing.expect(!s.exists("config"));
+}
+
+test "cli: uninstall leaves a skill that is not zcanon's" {
+    var s = try box("uninstall-foreign-skill");
+    defer s.deinit();
+    const skill = [_][2][]const u8{.{ "ZCANON_SKILL", try s.path("skills/zcanon/SKILL.md") }};
+    const mine = "---\nname: myskill\n---\nmine\n";
+    _ = try s.write("skills/zcanon/SKILL.md", mine);
+
+    const u = try s.zcanonEnv(&.{"uninstall"}, &skill);
+    try testing.expectEqual(@as(u8, 0), u.code);
+    try testing.expect(u.outContains("not a zcanon skill"));
+    try testing.expectEqualStrings(mine, try s.read("skills/zcanon/SKILL.md"));
+}
+
+test "cli: uninstall refuses to rewrite an unparseable settings file" {
+    var s = try box("uninstall-badjson");
+    defer s.deinit();
+    const bad = "{\"a\":";
+    _ = try s.write("settings.json", bad);
+
+    const u = try s.zcanon(&.{"uninstall"});
+    try testing.expectEqual(@as(u8, 1), u.code);
+    try testing.expectEqualStrings(bad, try s.read("settings.json"));
 }
