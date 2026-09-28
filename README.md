@@ -108,4 +108,10 @@ the book is one TSV. Std discovery/lookup lives in the companion zephem.
 
 ## License
 
-MIT. See `LICENSE`.
+GPL-3.0-or-later · Copyright (C) 2026 AstraLibernis
+
+zcanon is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See `LICENSE`.
+
+Versions up to and including commit `bdfcaee` were released under the MIT License; copies obtained under those terms keep them.
+
+Contributions are welcome under the [Developer Certificate of Origin](https://developercertificate.org/): sign off each commit with `git commit -s`. You keep the copyright on your contribution.
