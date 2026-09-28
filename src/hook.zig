@@ -41,6 +41,88 @@ pub fn filePathFromPayload(arena: std.mem.Allocator, payload: []const u8) !?[]co
     };
 }
 
+/// The tool that fired the hook (`Edit`, `Write`, `Bash`, …), or null.
+pub fn toolNameFromPayload(arena: std.mem.Allocator, payload: []const u8) ?[]const u8 {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{}) catch return null;
+    const obj = switch (parsed) {
+        .object => |o| o,
+        else => return null,
+    };
+    return strField(obj, "tool_name");
+}
+
+pub const BashRun = struct { cwd: []const u8, command: []const u8 };
+
+/// A Bash payload's working directory and command text, or null if either is missing.
+pub fn bashFromPayload(arena: std.mem.Allocator, payload: []const u8) ?BashRun {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{}) catch return null;
+    const obj = switch (parsed) {
+        .object => |o| o,
+        else => return null,
+    };
+    const ti = switch (obj.get("tool_input") orelse return null) {
+        .object => |o| o,
+        else => return null,
+    };
+    return .{ .cwd = strField(obj, "cwd") orelse return null, .command = strField(ti, "command") orelse return null };
+}
+
+/// The directories a shell command could have edited .zig files in: the session's working
+/// directory, every `cd` target in the command, and the directory of every absolute (or `~/`)
+/// path ending in `.zig`. Relative `cd` targets resolve against `cwd`. Roots nested inside
+/// another root are dropped, so no tree is walked twice.
+///
+/// This is deliberately a superset: which files actually changed is decided by modification
+/// time, not by parsing shell. A root that does not exist is simply skipped by the walker.
+pub fn bashRoots(arena: std.mem.Allocator, cwd: []const u8, home: []const u8, command: []const u8) ![]const []const u8 {
+    var roots: std.ArrayList([]const u8) = .empty;
+    try roots.append(arena, cwd);
+
+    var toks: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.tokenizeAny(u8, command, " \t\r\n;&|()");
+    while (it.next()) |t| try toks.append(arena, std.mem.trim(u8, t, "\"'"));
+
+    for (toks.items, 0..) |t, i| {
+        if (std.mem.eql(u8, t, "cd") and i + 1 < toks.items.len) {
+            const target = toks.items[i + 1];
+            if (target.len == 0 or target[0] == '-') continue;
+            try roots.append(arena, try expand(arena, cwd, home, target));
+        } else if (std.mem.endsWith(u8, t, ".zig") and (t[0] == '/' or std.mem.startsWith(u8, t, "~/"))) {
+            const full = try expand(arena, cwd, home, t);
+            try roots.append(arena, std.fs.path.dirname(full) orelse continue);
+        }
+    }
+
+    var uniq: std.ArrayList([]const u8) = .empty;
+    for (roots.items) |r| {
+        const trimmed = if (r.len > 1) std.mem.trimEnd(u8, r, "/") else r;
+        for (uniq.items) |u| {
+            if (std.mem.eql(u8, u, trimmed)) break;
+        } else try uniq.append(arena, trimmed);
+    }
+    var out: std.ArrayList([]const u8) = .empty;
+    for (uniq.items, 0..) |r, i| {
+        const nested = for (uniq.items, 0..) |other, j| {
+            if (i != j and within(r, other)) break true;
+        } else false;
+        if (!nested) try out.append(arena, r);
+    }
+    return out.items;
+}
+
+fn expand(arena: std.mem.Allocator, cwd: []const u8, home: []const u8, p: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, p, "~")) return home;
+    if (std.mem.startsWith(u8, p, "~/")) return std.fs.path.join(arena, &.{ home, p[2..] });
+    if (std.fs.path.isAbsolute(p)) return p;
+    return std.fs.path.resolve(arena, &.{ cwd, p });
+}
+
+/// `inner` lies strictly beneath `outer` (both without a trailing slash, except `/` itself).
+fn within(inner: []const u8, outer: []const u8) bool {
+    if (inner.len <= outer.len or !std.mem.startsWith(u8, inner, outer)) return false;
+    return std.mem.eql(u8, outer, "/") or inner[outer.len] == '/';
+}
+
 /// zsnag emits JSONL — a status record, then one object per finding. Lines that aren't
 /// objects are skipped.
 ///

@@ -4,23 +4,29 @@ description: >-
   Use whenever writing, editing, or reviewing Zig (.zig) code. zcanon catches the
   mistakes an LLM tends to make in Zig — removed builtins, footguns, unbalanced
   acquire/release — via the zsnag linter and a PostToolUse hook that runs zsnag +
-  `zig ast-check` on every edit. For looking UP real std APIs (names, signatures,
-  resolved types) so you don't write them from memory, use the companion `zephem` skill.
+  `zig ast-check` on every edit (including edits made from the shell). Also covers looking UP
+  real std APIs (names, signatures, resolved types) in the zephem map so you don't write
+  them from memory.
 ---
 
 # Writing correct Zig with zcanon
 
-zcanon keeps you from the mistakes an LLM makes in Zig. It is the **footgun + edit-check**
-half of the Zig toolkit; the **std-lookup** half lives in the companion **`zephem`** skill.
-Reach for both when writing Zig:
+zcanon keeps you from the mistakes an LLM makes in Zig, in two halves:
 
-- **`zephem`** (companion skill) — *before* you write a std call, look the API up in
-  zephem's complete, verified std map instead of recalling it from memory:
+- **Before** you write a std call, look it up in the **zephem map**, a complete, verified
+  snapshot of this Zig's std, instead of recalling it from memory:
   `{{ZEPHEM}} look <terms>` for keyword search, `{{ZEPHEM}} map find <name>` to see
-  whether a name exists and what replaced it, `{{ZEPHEM}} map doc <path>` for one exact decl.
+  whether a name exists and what replaced it, `{{ZEPHEM}} map doc <path>` for one exact decl,
+  `{{ZEPHEM}} map show <path>` for a whole module or type.
   Zig's std churns fast; don't guess signatures. If `map find` has no hit for a path you were
   about to use, that API does not exist in this Zig. Don't write it.
-- **`zcanon`** (this skill) — *while and after* you write, catch the known traps.
+  - Exit codes: **0** found · **1** no match (stderr may suggest the path you meant) · **2**
+    usage · **3** the map is unavailable. 3 is NOT a miss: regenerate the map, never fall back
+    to memory.
+  - Thin names are followed: `map doc std.ArrayList.append` resolves to
+    `std.array_list.Aligned().append`, and hits list their other public names on a `≡` line.
+  - `[priv]` hits are private decls, real but not callable at that path from outside their file.
+- **While and after** you write, the hook catches the known traps (below).
 
 This copy of the skill was installed by `zcanon setup`, which filled in the real paths above
 and below. Two binaries: **`zsnag`** (the linter) and **`zcanon`** (the hook, its setup and
@@ -28,7 +34,9 @@ the book reader). No `nu`, no `sqlite3`, no environment variables to set.
 
 ## After you edit a .zig file
 
-The PostToolUse hook feeds back, on every `.zig` edit:
+The PostToolUse hook feeds back, on every `.zig` edit — through Edit/Write, or through a shell
+command (`sed -i`, a heredoc, a script, `zig fmt`): after each Bash call it checks every `.zig`
+file modified since the previous tool call, under the working directory and any `cd` target:
 - `zig ast-check` — real syntax/compile errors
 - `zsnag` — known LLM footguns (the list below)
 
@@ -107,7 +115,7 @@ that rule file-wide. Say *why* in the same comment.
 ## What this tool does NOT do
 
 It catches known traps and runs the compiler's syntax check on every edit. It does **not**
-look up std APIs (that's the `zephem` skill), check your logic, or guarantee correctness.
+check your logic or guarantee correctness.
 The compiler and tests are the real safety net — compile and run tests (use
 `Debug`/`ReleaseSafe` for runtime checks) before claiming code works.
 

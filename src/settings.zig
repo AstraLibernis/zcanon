@@ -12,7 +12,9 @@ const builtin = @import("builtin");
 const vars = @import("vars.zig");
 
 pub const MARKER = "zcanon-zig-hook";
-pub const MATCHER = "Edit|Write|MultiEdit";
+/// `Bash` is in the list because a shell command can edit a .zig file too (`sed -i`, a heredoc,
+/// `zig fmt`); the hook finds those by modification time, see `hook.bashRoots`.
+pub const MATCHER = "Edit|Write|MultiEdit|Bash";
 pub const TIMEOUT_SECS = 30;
 
 const Value = std.json.Value;
@@ -57,6 +59,20 @@ pub fn ourCommand(gpa: std.mem.Allocator, root: *Value) ?[]const u8 {
                 else => {},
             }
         }
+    }
+    return null;
+}
+
+/// The matcher of our installed entry, if there is one. An entry written by an older zcanon
+/// has a narrower matcher; `doctor` compares this against `MATCHER`.
+pub fn ourMatcher(gpa: std.mem.Allocator, root: *Value) ?[]const u8 {
+    const arr = (postToolUse(gpa, root, false) catch return null) orelse return null;
+    for (arr.items) |e| {
+        if (!isOurs(e)) continue;
+        return switch (e.object.get("matcher") orelse return null) {
+            .string => |s| s,
+            else => null,
+        };
     }
     return null;
 }

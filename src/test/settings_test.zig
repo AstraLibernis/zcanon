@@ -300,3 +300,16 @@ test "ourCommand finds our entry among foreign ones" {
     try settings.addOurs(p.gpa(), &p.value, "\"/x/zcanon\" hook  # zcanon-zig-hook");
     try testing.expectEqualStrings("\"/x/zcanon\" hook  # zcanon-zig-hook", settings.ourCommand(p.gpa(), &p.value).?);
 }
+
+test "ourMatcher reads back the installed matcher, and an old narrow one is visible" {
+    var a = std.heap.ArenaAllocator.init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+    var old = try std.json.parseFromSliceLeaky(std.json.Value, gpa,
+        \\{"hooks":{"PostToolUse":[{"matcher":"Edit|Write|MultiEdit","hooks":[{"type":"command","command":"z hook  # zcanon-zig-hook"}]}]}}
+    , .{});
+    try testing.expectEqualStrings("Edit|Write|MultiEdit", settings.ourMatcher(gpa, &old).?);
+    try settings.addOurs(gpa, &old, "z hook  # zcanon-zig-hook");
+    try testing.expectEqualStrings(settings.MATCHER, settings.ourMatcher(gpa, &old).?);
+    try testing.expect(std.mem.find(u8, settings.MATCHER, "Bash") != null);
+}

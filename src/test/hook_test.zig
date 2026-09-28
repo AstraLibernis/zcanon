@@ -322,3 +322,60 @@ test "findings sort by line then column" {
     try testing.expectEqualStrings("c", items[1].rule);
     try testing.expectEqualStrings("a", items[2].rule);
 }
+
+// ---- Bash runs: a shell command can edit .zig files that no file_path names ----------------
+
+test "tool_name and a Bash payload's cwd + command are read" {
+    var a = arena();
+    defer a.deinit();
+    const payload =
+        \\{"hook_event_name":"PostToolUse","tool_name":"Bash","cwd":"/home/u/ws",
+        \\"tool_input":{"command":"sed -i 's/a/b/' src/x.zig","description":"d"}}
+    ;
+    try testing.expectEqualStrings("Bash", hook.toolNameFromPayload(a.allocator(), payload).?);
+    const run = hook.bashFromPayload(a.allocator(), payload).?;
+    try testing.expectEqualStrings("/home/u/ws", run.cwd);
+    try testing.expectEqualStrings("sed -i 's/a/b/' src/x.zig", run.command);
+}
+
+test "a Bash payload missing cwd or command yields null" {
+    var a = arena();
+    defer a.deinit();
+    try testing.expect(hook.bashFromPayload(a.allocator(), "{\"tool_input\":{\"command\":\"ls\"}}") == null);
+    try testing.expect(hook.bashFromPayload(a.allocator(), "{\"cwd\":\"/x\",\"tool_input\":{}}") == null);
+    try testing.expect(hook.bashFromPayload(a.allocator(), "not json") == null);
+}
+
+fn expectRoots(want: []const []const u8, cwd: []const u8, command: []const u8) !void {
+    var a = arena();
+    defer a.deinit();
+    const got = try hook.bashRoots(a.allocator(), cwd, "/home/u", command);
+    try testing.expectEqual(want.len, got.len);
+    for (want, got) |w, g| try testing.expectEqualStrings(w, g);
+}
+
+test "roots: the working directory alone for a plain command" {
+    try expectRoots(&.{"/home/u/ws"}, "/home/u/ws", "sed -i 's/x/y/' src/a.zig");
+}
+
+test "roots: a cd outside the working directory is walked too" {
+    try expectRoots(&.{ "/home/u/ws", "/home/u/other" }, "/home/u/ws", "cd ~/other && python3 - <<'EOF'");
+    try expectRoots(&.{ "/home/u/ws", "/srv/repo" }, "/home/u/ws", "cd \"/srv/repo\"; zig fmt .");
+}
+
+test "roots: a cd beneath the working directory is already covered" {
+    try expectRoots(&.{"/home/u/ws"}, "/home/u/ws", "cd sub/dir && sed -i x main.zig");
+}
+
+test "roots: an absolute .zig path adds its directory" {
+    try expectRoots(&.{ "/home/u/ws", "/tmp/scratch" }, "/home/u/ws", "sed -i 's/a/b/' /tmp/scratch/t.zig");
+    try expectRoots(&.{ "/home/u/ws", "/home/u/lib/src" }, "/home/u/ws", "cat > ~/lib/src/m.zig");
+}
+
+test "roots: a working directory nested in a cd target is dropped, duplicates collapse" {
+    try expectRoots(&.{"/home/u"}, "/home/u/ws", "cd ~ && cd ~/ && cd /home/u/ws");
+}
+
+test "roots: `cd -` and a bare trailing cd add nothing" {
+    try expectRoots(&.{"/home/u/ws"}, "/home/u/ws", "cd - && echo cd");
+}

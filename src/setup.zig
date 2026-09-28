@@ -252,10 +252,14 @@ fn phaseHook(c: vars.Ctx, r: *Report, mode: Mode) !void {
         return;
     };
     const have = settings.ourCommand(c.gpa, &root);
-    if (have != null and std.mem.eql(u8, have.?, want)) {
-        try r.line(.ok, "hook installed in {s}", .{sp});
+    const matcher = settings.ourMatcher(c.gpa, &root) orelse "";
+    const matcher_ok = std.mem.eql(u8, matcher, settings.MATCHER);
+    if (have != null and std.mem.eql(u8, have.?, want) and matcher_ok) {
+        try r.line(.ok, "hook installed in {s} (fires on {s})", .{ sp, settings.MATCHER });
     } else if (mode == .doctor) {
-        if (have) |h| {
+        if (have != null and !matcher_ok) {
+            try r.line(.fail, "the installed hook fires on `{s}`, not `{s}` — shell edits to .zig files go unchecked", .{ matcher, settings.MATCHER });
+        } else if (have) |h| {
             try r.line(.fail, "the installed hook runs `{s}`, not this build", .{settings.exeFromCommand(h) orelse h});
         } else {
             try r.line(.fail, "hook not installed in {s}", .{sp});
@@ -265,7 +269,9 @@ fn phaseHook(c: vars.Ctx, r: *Report, mode: Mode) !void {
         const had_file = exists(c, sp);
         try settings.addOurs(c.gpa, &root, want);
         try settings.save(c, sp, try settings.render(c.gpa, root));
-        if (have) |h| {
+        if (have != null and !matcher_ok) {
+            try r.line(.fixed, "hook now fires on `{s}` (was `{s}`)", .{ settings.MATCHER, matcher });
+        } else if (have) |h| {
             try r.line(.fixed, "hook updated to run this build (was `{s}`)", .{settings.exeFromCommand(h) orelse h});
         } else {
             try r.line(.fixed, "hook installed in {s}", .{sp});

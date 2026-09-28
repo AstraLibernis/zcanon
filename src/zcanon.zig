@@ -88,17 +88,113 @@ fn runHook(c: vars.Ctx) !void {
     var reader = std.Io.File.stdin().reader(c.io, &in_buf);
     const payload = reader.interface.allocRemaining(c.gpa, .unlimited) catch return;
 
-    const path = (hook.filePathFromPayload(c.gpa, payload) catch return) orelse return;
-    if (!std.mem.endsWith(u8, path, ".zig")) return;
-    const a = (try analyze(c, path)) orelse return;
+    // Every run moves the stamp forward, so a Bash run only sees edits made since the last
+    // tool call — never a file the Edit hook already reported.
+    const stamp = try vars.stampPath(c);
+    const since = stampTime(c, stamp);
+    defer touch(c, stamp);
 
-    const body = (try hook.renderContext(c.gpa, a.base, path, a.findings)) orelse "";
-    const ctx = (try hook.compose(c.gpa, body, &.{ a.notice, a.book_notice })) orelse return;
+    var paths: std.ArrayList([]const u8) = .empty;
+    var walk_notice: []const u8 = "";
+    const tool = hook.toolNameFromPayload(c.gpa, payload) orelse "";
+    if (std.mem.eql(u8, tool, "Bash")) {
+        // No stamp yet (first run after install): nothing to compare against, so check nothing
+        // rather than every .zig file in the tree.
+        const t = since orelse return;
+        const run = hook.bashFromPayload(c.gpa, payload) orelse return;
+        const roots = try hook.bashRoots(c.gpa, run.cwd, vars.home(c) catch "/", run.command);
+        walk_notice = try changedZig(c, roots, t, &paths);
+    } else {
+        const path = (hook.filePathFromPayload(c.gpa, payload) catch return) orelse return;
+        if (!std.mem.endsWith(u8, path, ".zig")) return;
+        try paths.append(c.gpa, path);
+    }
+    if (paths.items.len == 0 and walk_notice.len == 0) return;
+
+    var body: std.Io.Writer.Allocating = .init(c.gpa);
+    var notices: std.ArrayList([]const u8) = .empty;
+    if (walk_notice.len > 0) try notices.append(c.gpa, walk_notice);
+    for (paths.items) |path| {
+        const a = (try analyze(c, path)) orelse continue;
+        if (try hook.renderContext(c.gpa, a.base, path, a.findings)) |b| {
+            if (body.written().len > 0) try body.writer.writeAll("\n\n");
+            try body.writer.writeAll(b);
+        }
+        for ([_][]const u8{ a.notice, a.book_notice }) |n| {
+            if (n.len == 0) continue;
+            for (notices.items) |seen| {
+                if (std.mem.eql(u8, seen, n)) break;
+            } else try notices.append(c.gpa, n);
+        }
+    }
+    const ctx = (try hook.compose(c.gpa, body.written(), notices.items)) orelse return;
 
     var out_buf: [1 << 16]u8 = undefined;
     var w = stdout(c, &out_buf);
     try w.interface.writeAll(try hook.renderResponse(c.gpa, ctx));
     try w.interface.flush();
+}
+
+/// Most `.zig` files one Bash run is checked for, and most directory entries walked to find
+/// them. Both bound the hook's cost when the working directory is large (`/`, a home dir).
+const max_bash_files = 20;
+const max_walk_entries = 50_000;
+
+/// Directories never walked: build output, caches, VCS and dependency trees.
+fn skipDir(name: []const u8) bool {
+    if (name.len > 0 and name[0] == '.') return true; // .git, .zig-cache, .venv, …
+    const skip = [_][]const u8{ "zig-out", "zig-cache", "node_modules", "target", "__pycache__" };
+    for (skip) |d| if (std.mem.eql(u8, name, d)) return true;
+    return false;
+}
+
+/// Collect `.zig` files under `roots` modified after `since`. Returns a notice when a budget
+/// cut the search short — "no findings" must never hide "not everything was checked".
+fn changedZig(c: vars.Ctx, roots: []const []const u8, since: i96, out: *std.ArrayList([]const u8)) ![]const u8 {
+    var seen: usize = 0;
+    var truncated = false;
+    for (roots) |root| {
+        var dir = std.Io.Dir.cwd().openDir(c.io, root, .{ .iterate = true }) catch continue;
+        defer dir.close(c.io);
+        var walker = try dir.walkSelectively(c.gpa);
+        defer walker.deinit();
+        while (walker.next(c.io) catch null) |entry| {
+            seen += 1;
+            if (seen > max_walk_entries) {
+                truncated = true;
+                break;
+            }
+            switch (entry.kind) {
+                .directory => if (!skipDir(entry.basename)) walker.enter(c.io, entry) catch {}, // zsnag:ok — an unreadable directory is skipped, not fatal
+                .file => {
+                    if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+                    const st = dir.statFile(c.io, entry.path, .{}) catch continue;
+                    if (st.mtime.nanoseconds <= since) continue;
+                    if (out.items.len == max_bash_files) {
+                        truncated = true;
+                        break;
+                    }
+                    try out.append(c.gpa, try std.fs.path.join(c.gpa, &.{ root, entry.path }));
+                },
+                else => {},
+            }
+        }
+    }
+    if (!truncated) return "";
+    return std.fmt.allocPrint(c.gpa, "\n\n⚠ a shell command changed .zig files, but the search stopped at its limit " ++
+        "({d} files / {d} entries) — run `zcanon check <file>` on anything it did not list.", .{ max_bash_files, max_walk_entries });
+}
+
+/// The stamp's modification time, or null if there is no stamp yet.
+fn stampTime(c: vars.Ctx, path: []const u8) ?i96 {
+    const st = std.Io.Dir.cwd().statFile(c.io, path, .{}) catch return null;
+    return st.mtime.nanoseconds;
+}
+
+/// Best-effort: a failure here only means the next Bash run looks further back.
+fn touch(c: vars.Ctx, path: []const u8) void {
+    if (std.fs.path.dirname(path)) |d| std.Io.Dir.cwd().createDirPath(c.io, d) catch return;
+    std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = "" }) catch {}; // zsnag:ok — best-effort, see doc comment
 }
 
 const Analysis = struct {

@@ -76,6 +76,15 @@ pub fn zephemRecordPath(c: Ctx) Error![]u8 {
     return std.fs.path.join(c.gpa, &.{ dir, "zephem-home" });
 }
 
+/// Touched at the end of every hook run. A Bash run checks every `.zig` file modified since —
+/// the edits a shell command made (`sed -i`, a heredoc, a script) that no file_path names.
+pub fn stampPath(c: Ctx) Error![]u8 {
+    if (c.get("ZCANON_STAMP")) |p| return c.gpa.dupe(u8, p);
+    const dir = try configDir(c);
+    defer c.gpa.free(dir);
+    return std.fs.path.join(c.gpa, &.{ dir, "last-hook" });
+}
+
 /// Presence of this file disables the hook without touching settings.json.
 pub fn disableFlagPath(c: Ctx) Error![]u8 {
     const dir = try configDir(c);

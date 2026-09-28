@@ -46,7 +46,8 @@ The tools are equipment; `skill/SKILL.md` is what makes the model *reach for the
 session, in any project, without being told*. Without it, the tools sit unused (the same
 trap that kills any tool that depends on discipline). The skill is therefore the piece
 that turns "a few scripts on disk" into "install once, fewer Zig mistakes everywhere." It
-cross-references the companion **zephem** skill, which owns the std-lookup half.
+also carries the std-lookup half: how to query the zephem map. zephem itself ships no skill,
+hook or MCP server (removed 2026-09-28); it is only the map, and zcanon is its agent-facing consumer.
 
 `zcanon setup` installs it to `~/.claude/skills/zcanon/SKILL.md` with this machine's real
 paths filled in, and `zcanon doctor` reports when the installed copy has drifted from the repo's.
