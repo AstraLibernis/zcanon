@@ -26,6 +26,9 @@ zcanon keeps you from the mistakes an LLM makes in Zig, in two halves:
   - Thin names are followed: `map doc std.ArrayList.append` resolves to
     `std.array_list.Aligned().append`, and hits list their other public names on a `≡` line.
   - `[priv]` hits are private decls, real but not callable at that path from outside their file.
+  - Builtins are in the map too: `{{ZEPHEM}} map doc @intCast` (signature, doc, langref example).
+  - A multi-word `look` that no single decl matches prints the best hits per term on stderr —
+    compose the answer from those (`print stdout` → `std.Io.File.stdout` + `Writer.print`).
 - **While and after** you write, the hook catches the known traps (below).
 
 This copy of the skill was installed by `zcanon setup`, which filled in the real paths above
