@@ -7,6 +7,7 @@
 //! `ZCANON_CONFIG` — so a CLI test can install, uninstall and write a book without going
 //! anywhere near the developer's own `~/.claude/settings.json` or `~/.config/zcanon`.
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 pub const Result = struct {
@@ -88,10 +89,12 @@ pub const Sandbox = struct {
 
     /// Run `zcanon hook` with `payload` on stdin.
     pub fn hook(s: *Sandbox, file: []const u8) !Result {
+        // JSON-escape the path: Windows paths carry backslashes, which are invalid JSON
+        // escapes when pasted raw (Claude Code itself escapes them).
         const payload = try std.fmt.allocPrint(
             s.gpa(),
-            "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":\"{s}\"}}}}",
-            .{file},
+            "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f}}}}}",
+            .{std.json.fmt(file, .{})},
         );
         return s.runTool("zcanon", &.{"hook"}, payload);
     }
@@ -118,6 +121,9 @@ pub const Sandbox = struct {
         try env.put("ZCANON_SETTINGS", try s.path("settings.json"));
         try env.put("ZCANON_CONFIG", try s.path("config"));
         if (build_options.path_env.len > 0) try env.put("PATH", build_options.path_env);
+        // Windows resolves a bare `zig` to `zig.exe` through PATHEXT; without it the
+        // hook's `zig ast-check` never starts.
+        if (builtin.os.tag == .windows) try env.put("PATHEXT", ".COM;.EXE;.BAT;.CMD");
         if (build_options.zephem_home.len > 0) try env.put("ZEPHEM_HOME", build_options.zephem_home);
         // HOME is deliberately absent: if a path ever falls back to it, these tests fail
         // loudly rather than quietly writing to the real home directory.

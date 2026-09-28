@@ -4,7 +4,9 @@
 //! Path resolution. Every location is env-overridable and derived from `$HOME` otherwise —
 //! nothing is hardcoded to a particular checkout. `$HOME` itself has no fallback: if it is
 //! missing we fail loudly rather than silently writing state somewhere surprising.
+//! (Windows only: `%USERPROFILE%` stands in for an unset `$HOME`, since Windows doesn't set it.)
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Ctx = struct {
     gpa: std.mem.Allocator,
@@ -19,8 +21,12 @@ pub const Ctx = struct {
 
 pub const Error = error{HomeNotSet} || std.mem.Allocator.Error;
 
-fn home(c: Ctx) Error![]const u8 {
-    return c.get("HOME") orelse error.HomeNotSet;
+pub fn home(c: Ctx) Error![]const u8 {
+    if (c.get("HOME")) |h| return h;
+    if (builtin.os.tag == .windows) {
+        if (c.get("USERPROFILE")) |h| return h;
+    }
+    return error.HomeNotSet;
 }
 
 /// The Claude Code settings file the hook installs itself into.

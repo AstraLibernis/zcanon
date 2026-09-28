@@ -46,9 +46,10 @@ pub fn main(init: std.process.Init) !void {
     // Flags are read in a first pass so `zsnag a.zig --json b.zig` formats both files the
     // same way, rather than switching format midstream.
     var argv: std.ArrayList([]const u8) = .empty;
-    var it = init.minimal.args.iterate();
-    _ = it.next(); // argv[0]
-    while (it.next()) |a| {
+    // `Args.iterate()` is a compile error on Windows (it needs an allocator there);
+    // `toSlice` works on every OS and yields the same arguments.
+    const all_args = try init.minimal.args.toSlice(gpa);
+    for (all_args[1..]) |a| {
         if (std.mem.eql(u8, a, "--json")) {
             json = true;
         } else if (std.mem.eql(u8, a, "--no-map")) {
