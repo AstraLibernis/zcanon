@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Test aggregator. Tests live out-of-line here, one `<mod>_test.zig` per module, so the
 //! modules themselves stay lean. `zig build test` compiles this root.
 test {

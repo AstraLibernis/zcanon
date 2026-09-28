@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Drives the real `zcanon` and `zsnag` binaries in an isolated sandbox.
 //!
 //! Everything the tools touch is redirected through env vars — `ZCANON_SETTINGS`,

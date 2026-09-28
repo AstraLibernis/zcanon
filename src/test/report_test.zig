@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 const std = @import("std");
 const testing = std.testing;
 const zcanon = @import("zcanon");

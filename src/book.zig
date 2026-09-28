@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! The book — the local log of findings that SURVIVE. Each save re-scans the whole file,
 //! so anything no longer present has been fixed and is pruned; `hits` counts real
 //! recurrences, not repeated saves of a fix.

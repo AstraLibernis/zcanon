@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Reader over the companion zephem std map, so zsnag's advice is *derived from the
 //! installed std* rather than recalled from a string literal.
 //!

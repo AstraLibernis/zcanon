@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Finding priority tiers. Findings are never hidden — the tier only LABELS how much
 //! to worry, so the noisy advisory rules don't read as alarms. Pure function of
 //! (severity, file): error→blocking, warn→caution, else advisory; an advisory finding

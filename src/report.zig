@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Read-only views over the book — the port of `nu/zbook.nu`. Four modes: a table of
 //! contents by rule, the most recent findings, a per-file roll-up, and the detail for one
 //! rule. Nushell's `table` gave column alignment for free; here it is explicit.

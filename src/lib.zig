@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Internal re-export surface, so out-of-line tests in src/test/ can reach the modules
 //! by name (`@import("zcanon").tier`) instead of by path — a test root under src/test/
 //! cannot `@import("../…")` across the module boundary.

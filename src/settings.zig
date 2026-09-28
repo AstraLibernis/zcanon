@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Install / uninstall the PostToolUse hook in Claude Code's settings.json.
 //!
 //! The file belongs to the user, not to us: everything outside our own marker-tagged entry

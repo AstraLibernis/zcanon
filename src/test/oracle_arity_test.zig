@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! GENERATED oracle test — do not hand-edit the cases.
 //!
 //! PROVENANCE: one case per signature in zephem's map that carries inline `///` prose (the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! The linter core: the rule registry and the scan that produces findings.
 //!
 //! Token-based (the real Zig tokenizer, so comments/strings and identifier boundaries are

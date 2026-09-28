@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! Path resolution. Every location is env-overridable and derived from `$HOME` otherwise —
 //! nothing is hardcoded to a particular checkout. `$HOME` itself has no fallback: if it is
 //! missing we fail loudly rather than silently writing state somewhere surprising.

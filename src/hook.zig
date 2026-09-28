@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 AstraLibernis
+
 //! The PostToolUse hook: read the tool payload, check the edited .zig file with zsnag and
 //! `zig ast-check`, record what survives to the book, and feed the findings back grouped by
 //! priority. Nothing is hidden — the tier only labels urgency.
