@@ -5,6 +5,7 @@
 //! reader over the book. Replaces `nu/zhook.nu` + `nu/zbook.nu`; no `nu` and no `sqlite3`
 //! on the hook path.
 const std = @import("std");
+const builtin = @import("builtin");
 const vars = @import("vars.zig");
 const settings = @import("settings.zig");
 const hook = @import("hook.zig");
@@ -234,35 +235,39 @@ const Analysis = struct {
     book_notice: []const u8,
 };
 
-/// A child process started now and collected later, so its run overlaps the in-process scan.
-/// Only one stream is piped, so reading it to the end cannot deadlock.
+/// One file's syntax check on another thread. `smp_allocator` because the run's arena is not
+/// thread-safe; the result lives until the process exits.
+fn astTask(path: []const u8, src: [:0]const u8) hook.AstCheckError![]const u8 {
+    return hook.astCheck(std.heap.smp_allocator, path, src);
+}
+
+/// A child process started now and collected later, so its run overlaps the in-process work.
+/// Only stdout is piped, so reading it to the end cannot deadlock.
 const Pending = struct {
     child: ?std.process.Child,
-    stream: enum { stdout, stderr },
 
-    fn start(c: vars.Ctx, argv: []const []const u8, stream: @FieldType(Pending, "stream")) Pending {
-        const child = std.process.spawn(c.io, .{
+    fn start(c: vars.Ctx, argv: []const []const u8) Pending {
+        return .{ .child = std.process.spawn(c.io, .{
             .argv = argv,
             .stdin = .ignore,
-            .stdout = if (stream == .stdout) .pipe else .ignore,
-            .stderr = if (stream == .stderr) .pipe else .ignore,
-        }) catch null;
-        return .{ .child = child, .stream = stream };
+            .stdout = .pipe,
+            .stderr = .ignore,
+        }) catch null };
     }
 
-    const Done = struct { term: std.process.Child.Term, out: []u8 };
-
-    /// The child's exit and its piped output; null when it could not be started or read.
-    fn finish(p: *Pending, c: vars.Ctx) ?Done {
+    /// The child's stdout; null when it could not be started, read, or did not exit 0.
+    fn finish(p: *Pending, c: vars.Ctx) ?[]u8 {
         var child = p.child orelse return null;
         p.child = null;
         defer child.kill(c.io);
-        const file = (if (p.stream == .stdout) child.stdout else child.stderr) orelse return null;
         var buf: [4096]u8 = undefined;
-        var r = file.readerStreaming(c.io, &buf);
+        var r = (child.stdout orelse return null).readerStreaming(c.io, &buf);
         const out = r.interface.allocRemaining(c.gpa, .unlimited) catch return null;
         const term = child.wait(c.io) catch return null;
-        return .{ .term = term, .out = out };
+        return switch (term) {
+            .exited => |code| if (code == 0) out else null,
+            else => null,
+        };
     }
 };
 
@@ -270,33 +275,42 @@ const Pending = struct {
 /// map has disabled, and the zig version, each computed once.
 ///
 /// The linter runs in-process. zcanon used to spawn zsnag per file and parse its JSONL back,
-/// which re-indexed the whole zephem lookup table for every file checked. `zig version` and
-/// each file's `zig ast-check` are started first and collected later, so they run while the
-/// map loads and the files are scanned.
+/// which re-indexed the whole zephem lookup table for every file checked. The syntax check is
+/// in-process too (`hook.astCheck`); `zig version` is started first and collected after the
+/// map loads.
 const Run = struct {
     c: vars.Ctx,
+    /// Each file's syntax check, started in `init` so it runs alongside the map load; null
+    /// when the file was unreadable or no concurrency was available (then it runs inline).
+    ast: []?std.Io.Future(hook.AstCheckError![]const u8),
     map: ?zephem.Map,
     stale: []const snag.Id,
     zver: []const u8,
-    /// One `zig ast-check` per file, by index into the files given to `init`.
-    ast: []Pending,
     /// Why a check did not run, or ran against a stale map. "No findings" must never be
     /// indistinguishable from "never checked".
     notices: std.ArrayList([]const u8),
 
     fn init(c: vars.Ctx, files: []const File) !Run {
-        var version = Pending.start(c, &.{ "zig", "version" }, .stdout);
-        const ast = try c.gpa.alloc(Pending, files.len);
-        for (files, ast) |f, *p| p.* = if (f.src != null)
-            Pending.start(c, &.{ "zig", "ast-check", f.path }, .stderr)
+        var version = Pending.start(c, &.{ "zig", "version" });
+        const ast = try c.gpa.alloc(?std.Io.Future(hook.AstCheckError![]const u8), files.len);
+        for (files, ast) |f, *fut| fut.* = if (f.src) |src|
+            c.io.concurrent(astTask, .{ f.path, src }) catch null
         else
-            .{ .child = null, .stream = .stderr };
+            null;
 
-        var r: Run = .{ .c = c, .map = null, .stale = &.{}, .zver = "unknown", .ast = ast, .notices = .empty };
+        var r: Run = .{ .c = c, .ast = ast, .map = null, .stale = &.{}, .zver = "unknown", .notices = .empty };
         var keys: zephem.Keys = .empty;
         for (files) |f| if (f.src) |src| try snag.mapKeys(c.gpa, src, &keys);
         const loaded = zephem.load(c, &keys);
-        if (version.finish(c)) |v| r.zver = std.mem.trim(u8, v.out, " \t\r\n");
+        if (version.finish(c)) |v| r.zver = std.mem.trim(u8, v, " \t\r\n");
+        // The syntax check runs on the std this binary was built with.
+        if (!std.mem.eql(u8, r.zver, "unknown") and !std.mem.eql(u8, r.zver, builtin.zig_version_string))
+            try r.notices.append(c.gpa, try std.fmt.allocPrint(
+                c.gpa,
+                "\n\n⚠ zcanon was built with zig {s} but `zig` is {s}: the syntax check follows {s}. " ++
+                    "Rebuild zcanon (`zig build`) with the new zig.",
+                .{ builtin.zig_version_string, r.zver, builtin.zig_version_string },
+            ));
         if (loaded) |m| {
             r.map = m;
             if (try zephem.staleness(c, r.zver)) |warn|
@@ -345,17 +359,10 @@ const Run = struct {
             .message = f.msg,
         });
 
-        if (r.ast[i].finish(c)) |res| {
-            // Only a normal exit counts. A killed or signalled ast-check produces no diagnostics,
-            // and treating that as "ran" erased the file's whole ast history from the book.
-            switch (res.term) {
-                .exited => {
-                    try active.append(c.gpa, book.GROUP_AST);
-                    try hook.parseAstCheck(c.gpa, path, res.out, &findings);
-                },
-                else => {},
-            }
-        }
+        // Always runs: it is in-process, so there is no spawn to fail.
+        try active.append(c.gpa, book.GROUP_AST);
+        const diag = if (r.ast[i]) |*fut| try fut.await(c.io) else try hook.astCheck(c.gpa, path, src);
+        try hook.parseAstCheck(c.gpa, path, diag, &findings);
 
         // Dedup on the book's key before anything consumes the list — otherwise a duplicate
         // renders twice and double-counts `hits`.

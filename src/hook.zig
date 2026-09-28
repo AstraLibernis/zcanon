@@ -131,6 +131,32 @@ fn strField(o: std.json.ObjectMap, name: []const u8) ?[]const u8 {
     };
 }
 
+/// What `zig ast-check <path>` prints, produced in-process: parse, lower to ZIR, and render any
+/// compile errors with std's own error bundle. Output is byte-identical to the command's (the
+/// compiler uses these same std functions), minus the ~2 ms process spawn. Empty when clean.
+///
+/// It checks with the std zcanon was BUILT with; `Run.init` warns when that differs from the
+/// `zig` on PATH.
+pub const AstCheckError = std.mem.Allocator.Error || std.Io.Writer.Error;
+
+pub fn astCheck(gpa: std.mem.Allocator, path: []const u8, src: [:0]const u8) AstCheckError![]const u8 {
+    var tree = try std.zig.Ast.parse(gpa, src, .zig);
+    defer tree.deinit(gpa);
+    var zir = try std.zig.AstGen.generate(gpa, tree);
+    defer zir.deinit(gpa);
+    if (!zir.hasCompileErrors()) return "";
+
+    var wip: std.zig.ErrorBundle.Wip = undefined;
+    try wip.init(gpa);
+    defer wip.deinit();
+    try wip.addZirErrorMessages(zir, tree, src, path);
+    var eb = try wip.toOwnedBundle("");
+    defer eb.deinit(gpa);
+    var w: std.Io.Writer.Allocating = .init(gpa);
+    try eb.renderToWriter(.{}, &w.writer);
+    return w.toOwnedSlice();
+}
+
 /// Parse `zig ast-check` diagnostics: `<file>:<line>:<col>: error: <message>`.
 ///
 /// Split on the ": error: " separator first and take line/col from the RIGHT of the file
