@@ -99,6 +99,15 @@ pub fn fullViewFlagPath(c: Ctx) Error![]u8 {
     return std.fs.path.join(c.gpa, &.{ dir, "view.full" });
 }
 
+/// `p` made absolute against the working directory. Daemons are keyed by project path, so
+/// `.` and the same directory spelled out must name one daemon, not two.
+pub fn absolute(c: Ctx, p: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(p)) return std.fs.path.resolve(c.gpa, &.{p});
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const n = try std.process.currentPath(c.io, &buf);
+    return std.fs.path.resolve(c.gpa, &.{ buf[0..n], p });
+}
+
 /// Absolute path to this binary, so the installed hook command points at the running build
 /// rather than a guessed checkout. `std.fs.selfExePath` was removed in 0.16; the lookup now
 /// lives on the Io layer.

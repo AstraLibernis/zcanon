@@ -61,6 +61,9 @@ pub fn build(b: *std.Build) void {
     // ambient environment on posix (Environ.Block is a slice with no global accessor), so it
     // comes through here, where the build graph does have it.
     cli_opts.addOption([]const u8, "path_env", b.graph.environ_map.get("PATH") orelse "");
+    // `zig build` run by the tests (add-check, the daemon's compiler) needs a global cache, and
+    // the tests' environment has no HOME to derive one from.
+    cli_opts.addOption([]const u8, "zig_global_cache", b.graph.global_cache_root.path orelse "");
     cli_opts.addOption([]const u8, "zephem_home", b.graph.environ_map.get("ZEPHEM_HOME") orelse "");
     // The setup tests need zephem's lookup table: $ZEPHEM_LOOKUP, else inside $ZEPHEM_HOME,
     // else inside a zephem checkout beside this one. Missing → those tests skip, not fail.

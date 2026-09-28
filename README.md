@@ -94,6 +94,27 @@ book. Both default to the **short view**: a tally line, one row per blocking or 
 finding, and advisory findings collapsed to rule + line numbers. `zcanon view full` switches
 the hook to the full layout; `zcanon view short` switches back. Wiring it into another tool automatically is up to you for now.
 
+### Semantic errors: the background compiler
+
+`zig ast-check` sees syntax only: a wrong argument type or a call to a missing method passes
+it. So on the first `.zig` edit in a project, the hook also starts a background process for
+that project. It does two things:
+
+- keeps Zig's incremental compiler running on the project's `check` step
+  (`zig build check --watch -fincremental`), which re-checks the whole project in ~10 ms after
+  an edit (~240 ms cold);
+- keeps the zephem map loaded, which cuts the hook itself from ~3 ms to ~1.2 ms.
+
+The hook reports the compiler's latest result and never waits for it, so an edit's errors show
+up on the next edit. The process exits after 30 idle minutes, answers only to the zcanon binary
+that started it (a rebuilt zcanon replaces it), and on any problem the hook simply does all the
+work itself. `zcanon daemon status [dir]` and `zcanon daemon stop [dir]` inspect or stop it.
+
+A project without a `check` step gets a one-time note. `zcanon add-check [dir]` adds one: a
+small function appended to build.zig that type-checks every artifact the install and test steps
+build, without emitting binaries. It verifies the build still configures, and puts the original
+back if not (a copy is also kept under `~/.config/zcanon/backups`).
+
 ### Day to day
 
 ```sh

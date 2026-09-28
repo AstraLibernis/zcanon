@@ -50,6 +50,18 @@ finding, and the advisory tiers collapsed to rule + line numbers. For every mess
 `{{ZCANON}} check --full <file.zig>`; `{{ZCANON}} view full` switches the hook itself to the full
 layout (`view short` switches back).
 
+**Semantic errors (types, calls, fields) come from a background compiler.** The hook starts a
+per-project background process on the first `.zig` edit. It keeps Zig's incremental compiler
+running (`zig build check --watch -fincremental`), and every hook reports the latest result as
+`▲ [compile] path:line:col  message`. The hook never waits for the compiler, so an edit's own
+errors usually arrive with the *next* edit, and a result that predates the edit says so. The
+process exits after 30 idle minutes. `{{ZCANON}} daemon status` / `daemon stop` inspect or stop it.
+- The project needs a `check` step. When it has none, the hook says so once: **ask the user**
+  before running `{{ZCANON}} add-check <project>`. That command edits build.zig, verifies the
+  build still configures, and restores the original if not.
+- `zig build check` only analyses code reachable from the project's artifacts and tests; an
+  unused function is not type-checked until something calls it.
+
 It is installed and verified by one command, `{{ZCANON}} setup`, which checks zephem, checks
 that it can hook into Claude Code, installs the hook, then runs it on a probe file to prove the
 core rules, the zephem map rules and `zig ast-check` all fire. If findings stop appearing, run

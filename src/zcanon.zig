@@ -15,6 +15,8 @@ const tier = @import("tier.zig");
 const setup = @import("setup.zig");
 const snag = @import("snag.zig");
 const zephem = @import("zephem.zig");
+const daemon = @import("daemon.zig");
+const semantic = @import("semantic.zig");
 
 const usage =
     \\zcanon <command> [args]
@@ -31,6 +33,10 @@ const usage =
     \\  status             is it installed, and is it enabled?
     \\  disable | enable   toggle at runtime without touching settings.json
     \\  view [short|full]  how the hook reports findings (default short); no argument prints it
+    \\  add-check [dir]    add a `check` step to dir's build.zig (default: .), so the background
+    \\                     compiler can report semantic errors on every edit
+    \\  daemon status|stop [dir]
+    \\                     the project's background process (started by the hook; exits when idle)
     \\  book [report]      read the book: (default) | recent [N] | files | R0NN
     \\  prune              drop findings for files that no longer exist
     \\
@@ -60,6 +66,8 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "disable")) return setDisabled(c, true);
     if (std.mem.eql(u8, cmd, "enable")) return setDisabled(c, false);
     if (std.mem.eql(u8, cmd, "view")) return runView(c, rest);
+    if (std.mem.eql(u8, cmd, "add-check")) return runAddCheck(c, rest);
+    if (std.mem.eql(u8, cmd, "daemon")) return runDaemon(c, rest);
     if (std.mem.eql(u8, cmd, "book")) return runBook(c, rest);
     if (std.mem.eql(u8, cmd, "prune")) return runPrune(c);
 
@@ -137,6 +145,7 @@ fn runHook(c: vars.Ctx) !void {
         if (hook.wantsHint(view, a.findings)) hint = true;
         try addNotices(c.gpa, &notices, &.{a.book_notice});
     }
+    try run.semanticBlocks(view, &body, &notices);
     const ctx = (try hook.compose(c.gpa, body.written(), notices.items, hint)) orelse return;
 
     var out_buf: [1 << 16]u8 = undefined;
@@ -217,7 +226,7 @@ fn touch(c: vars.Ctx, path: []const u8) void {
     std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = "" }) catch {}; // zsnag:ok — best-effort, see doc comment
 }
 
-const File = struct { path: []const u8, src: ?[:0]const u8 };
+const File = struct { path: []const u8, src: ?[:0]const u8, mtime: i96 = 0 };
 
 /// Read every file up front: the zephem map is then loaded once, with only the paths these
 /// files reference. `src` is null for a file that cannot be read.
@@ -226,6 +235,7 @@ fn readAll(c: vars.Ctx, paths: []const []const u8) ![]File {
     for (paths, files) |p, *f| f.* = .{
         .path = p,
         .src = std.Io.Dir.cwd().readFileAllocOptions(c.io, p, c.gpa, .unlimited, .of(u8), 0) catch null,
+        .mtime = if (std.Io.Dir.cwd().statFile(c.io, p, .{})) |st| st.mtime.nanoseconds else |_| 0,
     };
     return files;
 }
@@ -289,9 +299,14 @@ const Run = struct {
     /// Why a check did not run, or ran against a stale map. "No findings" must never be
     /// indistinguishable from "never checked".
     notices: std.ArrayList([]const u8),
+    /// Each project's latest background-compiler result, from its daemon.
+    sem: std.ArrayList(Sem) = .empty,
+    /// Syntax findings by file, so a compiler error that repeats one is not shown twice.
+    ast_seen: std.ArrayList(struct { path: []const u8, f: hook.Finding }) = .empty,
+
+    const Sem = struct { root: []const u8, reply: daemon.Reply, newest_edit: i96 };
 
     fn init(c: vars.Ctx, files: []const File) !Run {
-        var version = Pending.start(c, &.{ "zig", "version" });
         const ast = try c.gpa.alloc(?std.Io.Future(hook.AstCheckError![]const u8), files.len);
         for (files, ast) |f, *fut| fut.* = if (f.src) |src|
             c.io.concurrent(astTask, .{ f.path, src }) catch null
@@ -301,7 +316,41 @@ const Run = struct {
         var r: Run = .{ .c = c, .ast = ast, .map = null, .stale = &.{}, .zver = "unknown", .notices = .empty };
         var keys: zephem.Keys = .empty;
         for (files) |f| if (f.src) |src| try snag.mapKeys(c.gpa, src, &keys);
-        const loaded = zephem.load(c, &keys);
+
+        // Each file's project daemon: the first one also serves the map rows and zig version.
+        // No daemon yet → start one for next time and do everything here.
+        var from_daemon: ?zephem.Map = null;
+        if (daemon.enabled(c)) {
+            var roots: std.ArrayList([]const u8) = .empty;
+            var newest: std.ArrayList(i96) = .empty;
+            for (files) |f| {
+                if (f.src == null) continue;
+                const abs = vars.absolute(c, f.path) catch continue;
+                const root = (semantic.projectRoot(c.gpa, c.io, abs) catch null) orelse continue;
+                for (roots.items, 0..) |seen, i| {
+                    if (std.mem.eql(u8, seen, root)) {
+                        newest.items[i] = @max(newest.items[i], f.mtime);
+                        break;
+                    }
+                } else {
+                    try roots.append(c.gpa, root);
+                    try newest.append(c.gpa, f.mtime);
+                }
+            }
+            for (roots.items, newest.items) |root, edit| {
+                const reply = daemon.request(c, root, .query, if (from_daemon == null) &keys else null) orelse {
+                    daemon.start(c, root);
+                    continue;
+                };
+                if (from_daemon == null) if (reply.rows) |rows| {
+                    from_daemon = try zephem.parse(c.gpa, rows, null);
+                    r.zver = reply.zig_version;
+                };
+                try r.sem.append(c.gpa, .{ .root = root, .reply = reply, .newest_edit = edit });
+            }
+        }
+        var version: Pending = if (from_daemon == null) Pending.start(c, &.{ "zig", "version" }) else .{ .child = null };
+        const loaded: zephem.LoadError!zephem.Map = from_daemon orelse zephem.load(c, &keys);
         if (version.finish(c)) |v| r.zver = std.mem.trim(u8, v, " \t\r\n");
         // The syntax check runs on the std this binary was built with.
         if (!std.mem.eql(u8, r.zver, "unknown") and !std.mem.eql(u8, r.zver, builtin.zig_version_string))
@@ -333,6 +382,43 @@ const Run = struct {
         return r;
     }
 
+    /// The background compiler's results, one block per project with errors, plus notices for
+    /// projects where it is off, starting, or down. Call after every `analyze`.
+    fn semanticBlocks(r: *Run, view: hook.View, body: *std.Io.Writer.Allocating, notices: *std.ArrayList([]const u8)) !void {
+        const c = r.c;
+        for (r.sem.items) |s| {
+            const rep = s.reply;
+            if (rep.offer.len > 0) try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(
+                c.gpa,
+                "\n\nℹ semantic checks are off for {s}: its build.zig has no `check` step. Ask the user " ++
+                    "whether to add one with `zcanon add-check {s}`; the compiler then type-checks every edit.",
+                .{ rep.offer, rep.offer },
+            )});
+            switch (rep.sem) {
+                .starting => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⋯ the background compiler for {s} is on its first build; its errors follow on a later edit.", .{s.root})}),
+                .down => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⚠ semantic checks are down for {s}: {s}", .{ s.root, rep.detail })}),
+                .ok, .no_check => {},
+                .errors => {
+                    // Drop what the syntax check already reported for a file checked this run.
+                    var diags: std.ArrayList(semantic.Diag) = .empty;
+                    for (rep.diags) |d| {
+                        const abs = try std.fs.path.resolve(c.gpa, &.{ s.root, d.path });
+                        const dup = for (r.ast_seen.items) |a| {
+                            const same_file = std.mem.eql(u8, try std.fs.path.resolve(c.gpa, &.{a.path}), abs);
+                            if (same_file and a.f.line == d.line and a.f.col == d.col and std.mem.eql(u8, a.f.message, d.message)) break true;
+                        } else false;
+                        if (!dup) try diags.append(c.gpa, d);
+                    }
+                    const before_edit = rep.finished_ns < s.newest_edit;
+                    if (try hook.renderSemantic(c.gpa, s.root, diags.items, before_edit, view)) |b| {
+                        if (body.written().len > 0) try body.writer.writeAll("\n\n");
+                        try body.writer.writeAll(b);
+                    }
+                },
+            }
+        }
+    }
+
     /// zsnag + `zig ast-check` on one file, deduped, sorted, and recorded to the book.
     fn analyze(r: *Run, i: usize, path: []const u8, src: [:0]const u8) !Analysis {
         const c = r.c;
@@ -362,7 +448,9 @@ const Run = struct {
         // Always runs: it is in-process, so there is no spawn to fail.
         try active.append(c.gpa, book.GROUP_AST);
         const diag = if (r.ast[i]) |*fut| try fut.await(c.io) else try hook.astCheck(c.gpa, path, src);
+        const before = findings.items.len;
         try hook.parseAstCheck(c.gpa, path, diag, &findings);
+        for (findings.items[before..]) |f| try r.ast_seen.append(c.gpa, .{ .path = path, .f = f });
 
         // Dedup on the book's key before anything consumes the list — otherwise a duplicate
         // renders twice and double-counts `hits`.
@@ -422,6 +510,11 @@ fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
             try w.interface.print("{s}: no findings{s}\n", .{ base, a.book_notice });
         }
     }
+    var sem_body: std.Io.Writer.Allocating = .init(c.gpa);
+    var sem_notices: std.ArrayList([]const u8) = .empty;
+    try run.semanticBlocks(view, &sem_body, &sem_notices);
+    if (sem_body.written().len > 0) try w.interface.print("{s}\n", .{sem_body.written()});
+    for (sem_notices.items) |n| try w.interface.print("{s}\n", .{std.mem.trimStart(u8, n, "\n")});
     if (hint) try w.interface.print("{s}\n", .{std.mem.trimStart(u8, hook.HINT, "\n")});
     try w.interface.flush();
     if (unreadable) std.process.exit(3);
@@ -535,6 +628,79 @@ fn setDisabled(c: vars.Ctx, off: bool) !void {
     var buf: [256]u8 = undefined;
     var w = stdout(c, &buf);
     try w.interface.print("hook {s} (settings.json untouched)\n", .{if (off) "disabled" else "enabled"});
+    try w.interface.flush();
+}
+
+/// `zcanon add-check [dir]`: add the `check` step to dir's build.zig, then prove the build
+/// still configures and lists it. On any failure the original is put back.
+fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
+    const dir = if (args.len > 0) args[0] else ".";
+    const path = try std.fs.path.join(c.gpa, &.{ dir, "build.zig" });
+    const src = std.Io.Dir.cwd().readFileAllocOptions(c.io, path, c.gpa, .unlimited, .of(u8), 0) catch
+        return fail(c, try std.fmt.allocPrint(c.gpa, "no build.zig in {s}\n", .{dir}));
+    const edited = semantic.addCheck(c.gpa, src) catch |e| return fail(c, switch (e) {
+        error.AlreadyAdded => "build.zig already has zcanon's check step.\n",
+        error.BuildZigInvalid => "build.zig does not parse; fix it first.\n",
+        error.NoBuildFn => "build.zig has no `pub fn build(b: *std.Build)` to add the step to.\n",
+        error.OutOfMemory => "out of memory\n",
+    });
+
+    // The original goes to zcanon's own folder, not the project's.
+    const backup_dir = try std.fs.path.join(c.gpa, &.{ try vars.configDir(c), "backups" });
+    try std.Io.Dir.cwd().createDirPath(c.io, backup_dir);
+    var name: [16]u8 = undefined;
+    _ = std.fmt.bufPrint(&name, "{x:0>16}", .{std.hash.Wyhash.hash(0, path)}) catch unreachable; // zsnag:ok — 16 hex digits fit exactly
+    const backup = try std.fmt.allocPrint(c.gpa, "{s}/{s}-build.zig", .{ backup_dir, &name });
+    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = backup, .data = src });
+    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = edited });
+
+    const listed = std.process.run(c.gpa, c.io, .{ .argv = &.{ "zig", "build", "-l" }, .cwd = .{ .path = dir } }) catch null;
+    const ok = if (listed) |res| switch (res.term) {
+        .exited => |code| code == 0 and std.mem.find(u8, res.stdout, "check") != null,
+        else => false,
+    } else false;
+    if (!ok) {
+        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = src });
+        const why = if (listed) |res| std.mem.trim(u8, res.stderr, " \t\r\n") else "could not run `zig build -l`";
+        return fail(c, try std.fmt.allocPrint(c.gpa, "adding the check step broke the build, so build.zig was restored:\n{s}\n", .{why}));
+    }
+    var buf: [1024]u8 = undefined;
+    var w = stdout(c, &buf);
+    try w.interface.print(
+        "Added a `check` step to {s} (original saved as {s}).\n" ++
+            "The background compiler picks it up on the next .zig edit; `zig build check` runs it by hand.\n",
+        .{ path, backup },
+    );
+    try w.interface.flush();
+}
+
+/// `zcanon daemon <root>` runs one (the hook starts it); `status` / `stop` talk to one.
+fn runDaemon(c: vars.Ctx, args: []const []const u8) !void {
+    if (args.len == 0) return fail(c, "usage: zcanon daemon status|stop [dir]\n");
+    const is_status = std.mem.eql(u8, args[0], "status");
+    const is_stop = std.mem.eql(u8, args[0], "stop");
+    if (!is_status and !is_stop) return daemon.serve(c, try vars.absolute(c, args[0]));
+
+    const dir = try vars.absolute(c, if (args.len > 1) args[1] else ".");
+    const probe = try std.fs.path.join(c.gpa, &.{ dir, "x.zig" });
+    const root = (try semantic.projectRoot(c.gpa, c.io, probe)) orelse
+        return fail(c, try std.fmt.allocPrint(c.gpa, "no build.zig at or above {s}\n", .{dir}));
+    var buf: [4096]u8 = undefined;
+    var w = stdout(c, &buf);
+    const reply = daemon.request(c, root, if (is_stop) .stop else .status, null) orelse {
+        try w.interface.print("{s}: no daemon running\n", .{root});
+        return w.interface.flush();
+    };
+    if (is_stop) {
+        try w.interface.print("{s}: daemon stopped\n", .{root});
+        return w.interface.flush();
+    }
+    try w.interface.print("{s}: daemon running; zig {s}; map {s}; compiler {t}", .{
+        root, reply.zig_version, if (reply.rows != null) "loaded" else reply.map_missing, reply.sem,
+    });
+    if (reply.detail.len > 0) try w.interface.print(" ({s})", .{reply.detail});
+    if (reply.sem == .errors or reply.sem == .ok) try w.interface.print(", {d} diagnostics", .{reply.diags.len});
+    try w.interface.writeAll("\n");
     try w.interface.flush();
 }
 

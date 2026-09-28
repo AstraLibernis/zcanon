@@ -500,3 +500,71 @@ test "cli: uninstall refuses to rewrite an unparseable settings file" {
     try testing.expectEqual(@as(u8, 1), u.code);
     try testing.expectEqualStrings(bad, try s.read("settings.json"));
 }
+
+// ---- the background compiler ----------------------------------------------------
+
+const demo_build =
+    \\const std = @import("std");
+    \\
+    \\pub fn build(b: *std.Build) void {
+    \\    const exe = b.addExecutable(.{
+    \\        .name = "demo",
+    \\        .root_module = b.createModule(.{ .root_source_file = b.path("main.zig"), .target = b.graph.host }),
+    \\    });
+    \\    b.installArtifact(exe);
+    \\}
+    \\
+;
+
+test "cli: add-check adds a working check step, and refuses a second time" {
+    var s = try box("add-check");
+    defer s.deinit();
+    _ = try s.write("proj/build.zig", demo_build);
+    _ = try s.write("proj/main.zig", "pub fn main() void {}\n");
+    const r = try s.zcanon(&.{ "add-check", try s.path("proj") });
+    try testing.expectEqual(@as(u8, 0), r.code);
+    try testing.expect(std.mem.find(u8, try s.read("proj/build.zig"), "zcanonCheck(b)") != null);
+    try testing.expectEqual(@as(u8, 2), (try s.zcanon(&.{ "add-check", try s.path("proj") })).code);
+}
+
+test "cli: add-check restores build.zig when the result does not build" {
+    var s = try box("add-check-restore");
+    defer s.deinit();
+    // A project that already has its own `check` step: a second one fails at configure time.
+    const own = demo_build[0 .. demo_build.len - 2] ++ "    _ = b.step(\"check\", \"mine\");\n}\n";
+    _ = try s.write("proj/build.zig", own);
+    _ = try s.write("proj/main.zig", "pub fn main() void {}\n");
+    const r = try s.zcanon(&.{ "add-check", try s.path("proj") });
+    try testing.expectEqual(@as(u8, 2), r.code);
+    try testing.expectEqualStrings(own, try s.read("proj/build.zig"));
+}
+
+test "cli: the daemon reports a type error ast-check cannot see, then stops" {
+    var s = try box("daemon");
+    defer s.deinit();
+    _ = try s.write("proj/build.zig", demo_build);
+    const main = try s.write("proj/main.zig", "pub fn main() void {\n    const x: u32 = \"five\";\n    _ = x;\n}\n");
+    try testing.expectEqual(@as(u8, 0), (try s.zcanon(&.{ "add-check", try s.path("proj") })).code);
+    const on = [_][2][]const u8{.{ "ZCANON_DAEMON", "1" }};
+    const proj = try s.path("proj");
+    // Stop it even when an assertion below fails. zsnag:ok — nothing to do if already gone
+    defer _ = s.zcanonEnv(&.{ "daemon", "stop", proj }, &on) catch {}; // zsnag:ok — see above
+
+    // The first run starts the daemon; wait (bounded) for its first build to finish.
+    _ = try s.hookEnv(main, &on);
+    var ctx: ?[]const u8 = null;
+    for (0..300) |_| {
+        try s.io.sleep(.fromMilliseconds(100), .awake);
+        const r = try s.hookEnv(main, &on);
+        try testing.expectEqual(@as(u8, 0), r.code);
+        ctx = try h.additionalContext(s.gpa(), r.stdout);
+        if (ctx != null and std.mem.find(u8, ctx.?, "[compile]") != null) break;
+    }
+    try testing.expect(ctx != null);
+    try testing.expect(std.mem.find(u8, ctx.?, "[compile] main.zig:2:20  expected type 'u32'") != null);
+
+    const st = try s.zcanonEnv(&.{ "daemon", "status", proj }, &on);
+    try testing.expect(std.mem.find(u8, st.stdout, "compiler errors") != null);
+    const stop = try s.zcanonEnv(&.{ "daemon", "stop", proj }, &on);
+    try testing.expect(std.mem.find(u8, stop.stdout, "daemon stopped") != null);
+}

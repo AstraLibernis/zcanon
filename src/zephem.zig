@@ -31,6 +31,8 @@ const Col = struct {
 };
 
 pub const Entry = struct {
+    /// The whole TSV row, as read.
+    row: []const u8 = "",
     path: []const u8,
     kind: []const u8,
     sig: []const u8,
@@ -251,6 +253,7 @@ fn index(gpa: std.mem.Allocator, text: []const u8, wanted: ?*const Keys) !Map {
         }
         if (n < Col.count) continue;
         try idx.put(gpa, f[Col.path], .{
+            .row = line,
             .path = f[Col.path],
             .kind = f[Col.kind],
             .sig = f[Col.sig],

@@ -370,7 +370,7 @@ fn liveTest(c: vars.Ctx, r: *Report, sp: []const u8, mode: Mode) !void {
     else
         "the map rules run with the core rules, and those did not run either; fix that first"});
     try r.line(if (ast) .ok else .fail, "live test: zig ast-check {s}", .{if (ast) "ran" else "did NOT run"});
-    if (!ast) try r.todo("`zig` must be on PATH in the environment Claude Code starts hooks in", .{});
+    if (!ast) try r.todo("the syntax check runs inside zcanon; rebuild it with `zig build` and rerun setup", .{});
 }
 
 /// Keep the installed skill identical to the one in this checkout.

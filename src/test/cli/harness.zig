@@ -99,6 +99,16 @@ pub const Sandbox = struct {
         return s.runTool("zcanon", &.{"hook"}, payload);
     }
 
+    /// `zcanon hook` with extra environment (name, value pairs).
+    pub fn hookEnv(s: *Sandbox, file: []const u8, extra: []const [2][]const u8) !Result {
+        const payload = try std.fmt.allocPrint(
+            s.gpa(),
+            "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f}}}}}",
+            .{std.json.fmt(file, .{})},
+        );
+        return s.runToolEnv("zcanon", &.{"hook"}, payload, extra);
+    }
+
     /// `zcanon <args...>` with an arbitrary stdin payload — for exercising malformed input.
     pub fn zcanonStdin(s: *Sandbox, args: []const []const u8, stdin: []const u8) !Result {
         return s.runTool("zcanon", args, stdin);
@@ -134,6 +144,10 @@ pub const Sandbox = struct {
         // hook's `zig ast-check` never starts.
         if (builtin.os.tag == .windows) try env.put("PATHEXT", ".COM;.EXE;.BAT;.CMD");
         if (build_options.zephem_home.len > 0) try env.put("ZEPHEM_HOME", build_options.zephem_home);
+        // No background process unless a test asks for one: a test must not leave a daemon
+        // (and a compiler watching the repo) running after it.
+        try env.put("ZCANON_DAEMON", "0");
+        if (build_options.zig_global_cache.len > 0) try env.put("ZIG_GLOBAL_CACHE_DIR", build_options.zig_global_cache);
         for (extra) |kv| try env.put(kv[0], kv[1]);
         // HOME is deliberately absent: if a path ever falls back to it, these tests fail
         // loudly rather than quietly writing to the real home directory.

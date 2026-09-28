@@ -9,6 +9,7 @@ const std = @import("std");
 const vars = @import("vars.zig");
 const tier = @import("tier.zig");
 const book = @import("book.zig");
+const semantic = @import("semantic.zig");
 
 /// Claude Code truncates nothing for us; keep the context bounded so a pathological file
 /// cannot flood the conversation.
@@ -298,6 +299,53 @@ fn renderShort(arena: std.mem.Allocator, base: []const u8, file: []const u8, fin
     }
     if (counts[@intFromEnum(tier.Tier.advisory)] + counts[@intFromEnum(tier.Tier.expected)] > 0)
         try w.writer.print("\nfull messages: zcanon check --full {s}", .{file});
+    return w.written();
+}
+
+/// Most compiler errors the short view lists; the rest are counted.
+const SHORT_SEMANTIC = 15;
+
+/// The background compiler's errors for one project. `before_edit`: the build finished before
+/// the newest edit, so this edit's own errors (or fixes) show up on a later one — the hook
+/// never waits for the compiler. Null when there is nothing to show.
+pub fn renderSemantic(
+    arena: std.mem.Allocator,
+    root: []const u8,
+    diags: []const semantic.Diag,
+    before_edit: bool,
+    view: View,
+) !?[]const u8 {
+    var errors: usize = 0;
+    for (diags) |d| {
+        if (std.mem.eql(u8, d.severity, "error")) errors += 1;
+    }
+    if (errors == 0) return null;
+
+    var w: std.Io.Writer.Allocating = .init(arena);
+    try w.writer.print("zcanon: zig build check in {s} — {d} error{s}{s}", .{
+        root, errors, if (errors == 1) "" else "s",
+        if (before_edit) " (from the build before this edit; it is being re-checked)" else "",
+    });
+    var shown: usize = 0;
+    for (diags) |d| {
+        const is_error = std.mem.eql(u8, d.severity, "error");
+        if (view == .short) {
+            if (!is_error) continue;
+            if (shown == SHORT_SEMANTIC) {
+                try w.writer.print("\n… {d} more: run `zig build check` in {s}", .{ errors - shown, root });
+                break;
+            }
+            const msg = truncateUtf8(d.message, SHORT_MSG);
+            try w.writer.print("\n▲ [compile] {s}:{d}:{d}  {s}{s}", .{
+                d.path, d.line, d.col, msg, if (msg.len < d.message.len) "…" else "",
+            });
+            shown += 1;
+        } else if (is_error) {
+            try w.writer.print("\n  [compile] {s}:{d}:{d}  {s}", .{ d.path, d.line, d.col, d.message });
+        } else {
+            try w.writer.print("\n      note: {s}:{d}:{d}  {s}", .{ d.path, d.line, d.col, d.message });
+        }
+    }
     return w.written();
 }
 
