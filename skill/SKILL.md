@@ -102,10 +102,15 @@ Confirm any other shape with `map find` before writing it.
   `.async()`/`.await()` are fine — those are ordinary identifiers now.)
 - `std.mem.copy` / `std.mem.set` — removed; use `@memcpy` / `@memset`.
 - `catch unreachable` and empty `catch {}` — these hide or crash on real errors; handle them.
-- `stream()` returning `0` does **not** mean end-of-stream — use `continue`, not `break`.
-- `@intCast` / `@ptrCast` / `@alignCast` — can panic or corrupt; verify the value first.
-- Acquire/release: every `init()` / `openFile()` of a resource needs a matching
-  `defer x.deinit()` / `defer x.close()`.
+- `Reader.stream()` returning `0` does **not** mean end of stream (that is
+  `error.EndOfStream`) — keep looping, don't `break`.
+- `@intCast` / `@ptrCast` / `@alignCast` / `@enumFromInt` / `@intFromFloat` — can panic or
+  corrupt on an out-of-range value; verify it first.
+- Acquire/release: an `openFile`/`createFile`/`openDir` needs `defer x.close(io)`; an
+  `ArenaAllocator`/`DebugAllocator`/`Io.Threaded` needs `defer x.deinit()`; a collection
+  (`= .empty`, `.init(alloc)`) needs `deinit` unless its allocator is an arena.
+- `std.Io.File.stdout().writer(…)` writes at file offsets, so two runs redirected into one
+  file overwrite each other. Use `.writerStreaming(…)` for stdout/stderr.
 - `page_allocator` as a general allocator is slow — pass an allocator in. (Backing an arena
   with it is fine.)
 - `std.debug.print` left in shipped code — remove it or use `std.log`.
@@ -144,11 +149,11 @@ The compiler and tests are the real safety net — compile and run tests (use
 
 ## Known blind spots
 
-- **R008 does not yet recognise Zig 0.16 initialisation.** It sees `openFile`/`createFile` and
-  the old `Type.init(...)` call form, but not `var x: T = .empty` or `= .init(...)`, so a leaked
-  `ArrayList` built the modern way passes silently. Check your own `defer ... deinit` pairs.
-- **R006 and R008 are AST rules: they do not fire on a file that fails to parse.** When writing
+- **R008 flags a leaked collection only when its allocator is visibly a real heap**
+  (`std.testing.allocator`, `smp_allocator`, `c_allocator`, `page_allocator`). An unflagged
+  `= .empty` list is not proof of no leak — it only means the allocator could be an arena.
+- **R008 is an AST rule: it does not fire on a file that fails to parse.** When writing
   fixtures, keep removed-keyword cases (R001/R002/R003, which make a file unparseable) in a
-  separate file from AST-rule cases.
+  separate file from R008 cases.
 - `zig ast-check` is syntax-level: it accepts calls to APIs that no longer exist. For code in a
   `test` block the real bar is `zig test --test-no-exec`.

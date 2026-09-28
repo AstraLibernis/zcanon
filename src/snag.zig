@@ -76,6 +76,7 @@ pub const Id = enum {
     r011_deprecated,
     r012_arity,
     r013_unknown_std,
+    r014_positional_stdio,
 };
 
 /// Every rule lives here. Adding one means adding a table entry and a `find` site — nothing
@@ -113,7 +114,8 @@ pub const rules = std.enums.directEnumArray(Id, Rule, 0, .{
     .r006_stream_zero = .{
         .code = "R006",
         .sev = .warn,
-        .msg = "stream() returning 0 means 'switched modes', not end-of-stream; use continue, not break/return. (heuristic)",
+        .msg = "Reader.stream() returning 0 is not end of stream (that is error.EndOfStream); keep looping instead of break/return. (heuristic)",
+        .premise = "std documents that stream()'s count, including zero, does not indicate end of stream",
     },
     .r007_cast = .{
         .code = "R007",
@@ -157,6 +159,12 @@ pub const rules = std.enums.directEnumArray(Id, Rule, 0, .{
         .msg = "this std path is not in the zephem map — cannot verify it exists.",
         .premise = "a fully-qualified std.* path with no entry in the map",
     },
+    .r014_positional_stdio = .{
+        .code = "R014",
+        .sev = .warn,
+        .msg = "stdout()/stderr().writer() writes at file offsets: redirected to a file, each run starts at byte 0 and `{ a; b; } > out` loses a's output. Use .writerStreaming().",
+        .premise = "File.writer defaults to positional writes; writerStreaming appends",
+    },
 });
 
 pub fn ruleOf(id: Id) Rule {
@@ -179,11 +187,46 @@ pub const Finding = struct {
 
 const Tk = struct { tag: Token.Tag, start: usize, end: usize };
 
-const NEEDS_DEINIT = [_][]const u8{
-    "ArrayList",     "HashMap", "ArrayHashMap", "MultiArrayList",
-    "ArenaAllocator", "BufSet", "BufMap",       "PriorityQueue",
-    "SegmentedList",
+/// What a declaration acquired, and so what releases it.
+const Owns = enum {
+    /// A file or directory: `close`.
+    handle,
+    /// Owns threads or its own memory whatever allocator backs it: `deinit`, always.
+    resource,
+    /// A collection: its memory comes from an allocator, and an arena frees it wholesale.
+    /// Flagged only when the allocator is visibly a real heap (see `heapAllocator`).
+    collection,
 };
+
+/// Type names, matched as substrings of an identifier so `AutoHashMap`,
+/// `StringHashMapUnmanaged` and `MultiArrayList` count.
+const RESOURCE_TYPES = [_][]const u8{ "ArenaAllocator", "DebugAllocator", "Threaded" };
+const COLLECTION_TYPES = [_][]const u8{
+    "ArrayList", "HashMap", "BufSet", "BufMap", "PriorityQueue", "SegmentedList",
+};
+
+fn ownerKind(name: []const u8) ?Owns {
+    for (RESOURCE_TYPES) |ty| if (std.mem.find(u8, name, ty) != null) return .resource;
+    for (COLLECTION_TYPES) |ty| if (std.mem.find(u8, name, ty) != null) return .collection;
+    return null;
+}
+
+/// An allocator expression that is certainly NOT an arena, so memory from it leaks unless
+/// freed. Measured: flagging every collection without a `deinit` hit 94 declarations across
+/// Zig's std and four real projects, nearly all arena-backed and correct.
+fn heapAllocator(text: []const u8) bool {
+    const heaps = [_][]const u8{ "testing.allocator", "smp_allocator", "c_allocator", "page_allocator" };
+    for (heaps) |h| if (std.mem.find(u8, text, h) != null) return true;
+    return false;
+}
+
+/// Source text of a node.
+fn nodeText(st: Scanner, tree: *const std.zig.Ast, t: []const Tk, n: std.zig.Ast.Node.Index) []const u8 {
+    const first = tree.firstToken(n);
+    const last = tree.lastToken(n);
+    if (last >= t.len) return "";
+    return st.src[t[first].start..t[last].end];
+}
 
 fn eq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
@@ -402,6 +445,10 @@ fn scanTokens(st: Scanner, t: []const Tk) !void {
                     try st.emit(tok.start, .r003_mem_copy);
                 if (eq(w, "page_allocator"))
                     try st.emit(tok.start, .r009_page_allocator);
+                if (eq(w, "writer") and after_dot and i >= 4 and t[i - 2].tag == .r_paren and
+                    t[i - 3].tag == .l_paren and t[i - 4].tag == .identifier and
+                    (eq(st.text(t[i - 4]), "stdout") or eq(st.text(t[i - 4]), "stderr")))
+                    try st.emit(tok.start, .r014_positional_stdio);
                 if (eq(w, "print") and after_dot and
                     prev2 != null and prev2.?.tag == .identifier and eq(st.text(prev2.?), "debug"))
                     try st.emit(tok.start, .r010_debug_print);
@@ -416,7 +463,9 @@ fn scanTokens(st: Scanner, t: []const Tk) !void {
             },
             .builtin => {
                 const w = st.text(tok);
-                if (eq(w, "@intCast") or eq(w, "@ptrCast") or eq(w, "@alignCast")) {
+                if (eq(w, "@intCast") or eq(w, "@ptrCast") or eq(w, "@alignCast") or
+                    eq(w, "@enumFromInt") or eq(w, "@intFromFloat"))
+                {
                     // `x[@intCast(..)]` is already bounds-checked by the element access, so
                     // the warning would be redundant there. (Index casts dominate in ported C.)
                     const is_index = prev != null and prev.?.tag == .l_bracket;
@@ -428,7 +477,7 @@ fn scanTokens(st: Scanner, t: []const Tk) !void {
     }
 }
 
-const Acq = struct { name: []const u8, close: bool, off: usize, tok: u32 };
+const Acq = struct { name: []const u8, owns: Owns, off: usize, tok: u32, heap: bool };
 
 const Span = struct { first: u32, last: u32 };
 
@@ -456,7 +505,7 @@ fn isTypeDefinition(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool
     };
 }
 
-/// Token span of every function body, so a release can be matched within the declaration's own
+/// Token span of every function (and test) body, so a release can be matched within the declaration's own
 /// function instead of anywhere in the file. Matching file-wide meant two functions each
 /// declaring `var l = ...init(gpa)`, with only one `defer l.deinit()`, reported NOTHING —
 /// a rule claiming clean code over a real leak. The names that repeat (`l`, `list`, `arena`,
@@ -465,7 +514,8 @@ fn fnSpans(gpa: std.mem.Allocator, tree: *const std.zig.Ast) ![]Span {
     var spans: std.ArrayList(Span) = .empty;
     for (0..tree.nodes.len) |i| {
         const node: std.zig.Ast.Node.Index = @enumFromInt(i);
-        if (tree.nodeTag(node) != .fn_decl) continue;
+        // Test bodies are function bodies too: a leak in a test is still a leak.
+        if (tree.nodeTag(node) != .fn_decl and tree.nodeTag(node) != .test_decl) continue;
         try spans.append(gpa, .{ .first = tree.firstToken(node), .last = tree.lastToken(node) });
     }
     return spans.toOwnedSlice(gpa);
@@ -502,6 +552,88 @@ fn enclosing(spans: []const Span, tok: u32) ?Span {
     return best;
 }
 
+const Acquired = struct { owns: Owns, heap: bool };
+
+/// Is this declaration an acquisition, and of what? Null if not. `heap` is set when the
+/// initializer itself passes a known heap allocator (`.init(std.testing.allocator)`).
+///
+/// Only when the acquiring expression IS the initializer (under an optional `try`). A value
+/// computed by a labelled block or an `if` that opens and closes a file inside it is not
+/// itself a file; scanning the initializer's tokens for `openFile` made that fire 9 times on
+/// Zig's own std. Zig 0.16's decl literals count: `var l: std.ArrayList(u8) = .empty;` and
+/// `var a: std.heap.ArenaAllocator = .init(gpa);` take the type from the annotation.
+fn acquisition(
+    st: Scanner,
+    tree: *const std.zig.Ast,
+    t: []const Tk,
+    type_node: ?std.zig.Ast.Node.Index,
+    init_node: std.zig.Ast.Node.Index,
+) ?Acquired {
+    var n = init_node;
+    if (tree.nodeTag(n) == .@"try") n = tree.nodeData(n).node;
+
+    const annotated: ?Owns = if (type_node) |tn| blk: {
+        var j = tree.firstToken(tn);
+        while (j <= tree.lastToken(tn) and j < t.len) : (j += 1) {
+            if (t[j].tag == .identifier) if (ownerKind(st.text(t[j]))) |k| break :blk k;
+        }
+        break :blk null;
+    } else null;
+
+    // `.empty`
+    if (tree.nodeTag(n) == .enum_literal) {
+        if (!eq(tree.tokenSlice(tree.nodeMainToken(n)), "empty")) return null;
+        return .{ .owns = annotated orelse return null, .heap = false };
+    }
+
+    var buf: [1]std.zig.Ast.Node.Index = undefined;
+    const call = tree.fullCall(&buf, n) orelse return null;
+    const callee = call.ast.fn_expr;
+    const last = tree.lastToken(callee);
+    if (last >= t.len or t[last].tag != .identifier) return null;
+    const m = st.text(t[last]);
+
+    if (eq(m, "openFile") or eq(m, "createFile") or eq(m, "openDir")) return .{ .owns = .handle, .heap = false };
+    // `initBuffer` borrows a caller's buffer; there is nothing to free.
+    if (!std.mem.startsWith(u8, m, "init") or eq(m, "initBuffer")) return null;
+    const heap = call.ast.params.len > 0 and heapAllocator(nodeText(st, tree, t, call.ast.params[0]));
+
+    // `.init(…)`: a decl literal, typed by the annotation.
+    if (tree.nodeTag(callee) == .enum_literal) return .{ .owns = annotated orelse return null, .heap = heap };
+    // `std.ArrayList(u8).init(gpa)`, `std.heap.ArenaAllocator.init(gpa)`: typed by the callee.
+    var j = tree.firstToken(callee);
+    while (j < last) : (j += 1) {
+        if (t[j].tag == .identifier) if (ownerKind(st.text(t[j]))) |k| return .{ .owns = k, .heap = heap };
+    }
+    return null;
+}
+
+/// True when some `name.method(A, …)` in the span passes a known heap allocator as `A` —
+/// how an unmanaged collection (`= .empty`) shows where its memory comes from.
+fn usedWithHeap(st: Scanner, t: []const Tk, span: Span, name: []const u8) bool {
+    var k: usize = span.first;
+    while (k + 3 <= span.last and k + 3 < t.len) : (k += 1) {
+        if (t[k].tag != .identifier or !eq(st.text(t[k]), name)) continue;
+        if (t[k + 1].tag != .period or t[k + 2].tag != .identifier or t[k + 3].tag != .l_paren) continue;
+        // The first argument runs to the first `,` or `)` at depth 0.
+        var depth: usize = 0;
+        var e = k + 4;
+        while (e <= span.last and e < t.len) : (e += 1) {
+            switch (t[e].tag) {
+                .l_paren, .l_bracket, .l_brace => depth += 1,
+                .r_paren, .r_bracket, .r_brace => {
+                    if (depth == 0) break;
+                    depth -= 1;
+                },
+                .comma => if (depth == 0) break,
+                else => {},
+            }
+        }
+        if (e > k + 4 and heapAllocator(st.src[t[k + 4].start..t[e - 1].end])) return true;
+    }
+    return false;
+}
+
 /// R008: acquire (init of a deinit-having type, or openFile/createFile) without release.
 ///
 /// Grows dynamically — the old fixed 128-entry cap dropped acquisitions silently (ledger B4).
@@ -509,6 +641,9 @@ fn enclosing(spans: []const Span, tok: u32) ?Span {
 fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t: []const Tk) !void {
     var acq: std.ArrayList(Acq) = .empty;
     defer acq.deinit(gpa);
+
+    const spans = try fnSpans(gpa, tree);
+    defer gpa.free(spans);
 
     // Declarations come from the AST, not from scanning for the `const`/`var` KEYWORD and
     // reading to the next `;`. That scan had two failure modes, both systemic: for
@@ -522,44 +657,27 @@ fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t:
 
         const name_tok = decl.ast.mut_token + 1;
         if (name_tok >= t.len) continue;
+        // A container-level value lives for the whole program; nothing is expected to free it.
+        if (enclosing(spans, name_tok) == null) continue;
 
-        // Scan the INITIALIZER's own tokens — nothing before or after it.
-        const first = tree.firstToken(init_node);
-        const last = tree.lastToken(init_node);
-        var saw_init = false;
-        var saw_type = false;
-        var close = false;
-        var j: usize = first;
-        while (j <= last and j < t.len) : (j += 1) {
-            if (t[j].tag != .identifier) continue;
-            const wj = st.text(t[j]);
-            if (wj.len >= 4 and std.mem.startsWith(u8, wj, "init") and
-                j > 0 and t[j - 1].tag == .period) saw_init = true;
-            if (eq(wj, "openFile") or eq(wj, "createFile")) {
-                saw_init = true;
-                close = true;
-            }
-            for (NEEDS_DEINIT) |ty| if (eq(wj, ty)) {
-                saw_type = true;
-            };
-        }
-        if (saw_init and (saw_type or close)) try acq.append(gpa, .{
+        const got = acquisition(st, tree, t, decl.ast.type_node.unwrap(), init_node) orelse continue;
+        try acq.append(gpa, .{
             .name = st.text(t[name_tok]),
-            .close = close,
+            .owns = got.owns,
             .off = t[name_tok].start,
             .tok = name_tok,
+            .heap = got.heap,
         });
     }
     if (acq.items.len == 0) return;
-
-    const spans = try fnSpans(gpa, tree);
-    defer gpa.free(spans);
 
     // One pass per function that actually holds an acquisition, building the set of names
     // released in it — rather than rescanning the whole token stream per acquisition, which
     // was the O(n²) half of the old implementation.
     for (acq.items) |a| {
-        const span = enclosing(spans, a.tok) orelse Span{ .first = 0, .last = @intCast(t.len - 1) };
+        const span = enclosing(spans, a.tok) orelse continue;
+        // A collection is only a leak when its memory visibly comes from a real heap.
+        if (a.owns == .collection and !a.heap and !usedWithHeap(st, t, span, a.name)) continue;
         var released = false;
         var k: usize = span.first;
         while (k <= span.last and k < t.len) : (k += 1) {
@@ -572,10 +690,21 @@ fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t:
                 released = true;
                 break;
             }
+            // Moved into something else (`self.list = l;`, `.{ .list = l }`): the new owner
+            // releases it. `_ = l` discards, which moves nothing.
+            const discard = k >= 2 and t[k - 2].tag == .identifier and eq(st.text(t[k - 2]), "_");
+            if (k > 0 and t[k - 1].tag == .equal and !discard) {
+                released = true;
+                break;
+            }
             if (k + 2 > span.last or k + 2 >= t.len) continue;
             if (t[k + 1].tag != .period or t[k + 2].tag != .identifier) continue;
             const m = st.text(t[k + 2]);
-            if ((!a.close and eq(m, "deinit")) or (a.close and eq(m, "close"))) {
+            const releases = if (a.owns == .handle)
+                eq(m, "close")
+            else
+                eq(m, "deinit") or std.mem.startsWith(u8, m, "toOwnedSlice");
+            if (releases) {
                 released = true;
                 break;
             }
@@ -592,15 +721,23 @@ fn scanStreamZero(st: Scanner, t: []const Tk) !void {
             t[i + 3].tag == .equal_equal and t[i + 4].tag == .number_literal and eq(st.text(t[i + 4]), "0")))
             continue;
 
+        // The variable's nearest declaration before the test must be initialised by a
+        // `.stream(` call. Matching any `stream`-prefixed identifier anywhere earlier in the
+        // file fired 7 times on Zig's own std, all wrong (a field named `stream`, an
+        // unrelated `n`).
         const vn = st.text(t[i + 2]);
         var from_stream = false;
-        var k: usize = 0;
-        while (k + 2 < i) : (k += 1) {
-            if (t[k].tag != .identifier or !eq(st.text(t[k]), vn)) continue;
+        var k = i;
+        while (k > 1) : (k -= 1) {
+            const is_decl = t[k].tag == .identifier and eq(st.text(t[k]), vn) and
+                (t[k - 1].tag == .keyword_const or t[k - 1].tag == .keyword_var);
+            if (!is_decl) continue;
             var m = k;
-            while (m < i and t[m].tag != .semicolon) : (m += 1) {
-                if (t[m].tag == .identifier and std.mem.startsWith(u8, st.text(t[m]), "stream")) from_stream = true;
+            while (m + 2 < i and t[m].tag != .semicolon) : (m += 1) {
+                if (t[m].tag == .period and t[m + 1].tag == .identifier and
+                    eq(st.text(t[m + 1]), "stream") and t[m + 2].tag == .l_paren) from_stream = true;
             }
+            break;
         }
         if (!from_stream) continue;
 

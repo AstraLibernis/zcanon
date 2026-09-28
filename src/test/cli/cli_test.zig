@@ -194,7 +194,7 @@ test "cli: a syntax error does not erase the structural rules' history" {
     var s = try box("hook-syntaxerror");
     defer s.deinit();
     // A real leak, recorded while the file parses.
-    const leaky = "const std = @import(\"std\");\npub fn f(gpa: std.mem.Allocator) void {\n    var l = std.ArrayList(u8).init(gpa);\n    _ = l;\n}\n";
+    const leaky = "const std = @import(\"std\");\npub fn f(gpa: std.mem.Allocator) void {\n    var l: std.heap.ArenaAllocator = .init(gpa);\n    _ = l;\n}\n";
     const f = try s.write("t.zig", leaky);
     _ = try s.hook(f);
     try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R008") != null);

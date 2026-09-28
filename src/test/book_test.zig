@@ -282,3 +282,12 @@ test "parsing an empty or header-only book yields no records" {
     try b.parse(book.header ++ "\n");
     try testing.expectEqual(@as(usize, 0), b.recs.items.len);
 }
+
+test "groupOf reads the registry: R014 is core, R011-R013 are map, R008 structural" {
+    try testing.expectEqualStrings("core", book.groupOf("R014"));
+    try testing.expectEqualStrings("map", book.groupOf("R011"));
+    try testing.expectEqualStrings("map", book.groupOf("R013"));
+    try testing.expectEqualStrings("structural", book.groupOf("R008"));
+    try testing.expectEqualStrings("ast", book.groupOf("ast-check"));
+    try testing.expectEqualStrings("core", book.groupOf("R099")); // a removed rule
+}

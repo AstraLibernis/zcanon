@@ -119,13 +119,13 @@ test "R008 is satisfied by a matching deinit or close" {
     defer a.deinit();
     const leaked =
         \\fn f(gpa: Allocator) void {
-        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    var l: std.heap.ArenaAllocator = .init(gpa);
         \\    _ = l;
         \\}
     ;
     const released =
         \\fn f(gpa: Allocator) void {
-        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    var l: std.heap.ArenaAllocator = .init(gpa);
         \\    defer l.deinit();
         \\    _ = l;
         \\}
@@ -176,7 +176,7 @@ test "R008 does not read `const` inside a type expression as a declaration" {
     // Zig file, so this fired almost everywhere.
     const src =
         \\fn takesSlice(s: []const u8, gpa: Allocator) usize {
-        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    var l: std.heap.ArenaAllocator = .init(gpa);
         \\    defer l.deinit();
         \\    return s.len + l.items.len;
         \\}
@@ -197,7 +197,7 @@ test "R008 does not fire when the resource is returned to the caller" {
     ;
     const wrapped =
         \\fn make(gpa: Allocator) !Holder {
-        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    var l: std.heap.ArenaAllocator = .init(gpa);
         \\    return .{ .list = l };
         \\}
     ;
@@ -212,12 +212,12 @@ test "R008 scopes the release to the declaration's own function" {
     // real leak, because some *other* function released a variable of the same name.
     const src =
         \\fn released(gpa: Allocator) void {
-        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    var l: std.heap.ArenaAllocator = .init(gpa);
         \\    defer l.deinit();
         \\    _ = l;
         \\}
         \\fn leaked(gpa: Allocator) void {
-        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    var l: std.heap.ArenaAllocator = .init(gpa);
         \\    _ = l;
         \\}
     ;
@@ -329,7 +329,7 @@ test "findings come out sorted by position" {
     defer a.deinit();
     const src =
         \\fn f(gpa: Allocator) void {
-        \\    var l = std.ArrayList(u8).init(gpa);
+        \\    var l: std.heap.ArenaAllocator = .init(gpa);
         \\    std.debug.print("x", .{});
         \\    const y = foo() catch unreachable;
         \\    _ = .{ l, y };
@@ -389,4 +389,72 @@ test "clean source produces nothing" {
     var out: std.ArrayList(snag.Finding) = .empty;
     try scan(a.allocator(), src, &out);
     try testing.expectEqual(@as(usize, 0), out.items.len);
+}
+
+// ---- one case per rule: fires where it should, silent where it should not ------------
+//
+// Each positive was checked against the compiler: removed syntax/APIs fail to build, and
+// every R008 positive is reported as a leak by `zig test` itself, while its arena-backed
+// negative passes clean. The map rules (R011–R013) need the zephem map and are covered in
+// zephem_test.zig and the CLI tests.
+
+const RuleCase = struct { name: []const u8, want: []const u8, src: [:0]const u8 };
+
+const rule_cases = [_]RuleCase{
+    .{ .name = "r001_pos", .want = "R001", .src = "fn foo() void {}\ntest { const x = async foo(); _ = x; }" },
+    .{ .name = "r001_await", .want = "R001", .src = "test { var f: u8 = 0; _ = await f; }" },
+    .{ .name = "r001_neg_method", .want = "", .src = "const S = struct { fn async(_: S) void {} };\ntest { const s: S = .{}; s.async(); }" },
+    .{ .name = "r002_pos", .want = "R002", .src = "usingnamespace @import(\"std\");" },
+    .{ .name = "r003_pos", .want = "R003", .src = "const std = @import(\"std\");\ntest { var d: [2]u8 = undefined; std.mem.copy(u8, &d, \"ab\"); }" },
+    .{ .name = "r003_set", .want = "R003", .src = "const std = @import(\"std\");\ntest { var d: [2]u8 = undefined; std.mem.set(u8, &d, 0); }" },
+    .{ .name = "r003_neg", .want = "", .src = "const std = @import(\"std\");\ntest { var d: [2]u8 = undefined; @memcpy(&d, \"ab\"); @memset(&d, 0); }" },
+    .{ .name = "r004_pos", .want = "R004", .src = "fn f() !u8 { return 1; }\ntest { const v = f() catch unreachable; _ = v; }" },
+    .{ .name = "r005_pos", .want = "R005", .src = "fn f() !void {}\ntest { f() catch {}; }" },
+    .{ .name = "r005_neg", .want = "", .src = "fn f() !void {}\ntest { f() catch |e| return e; }" },
+    .{ .name = "r006_pos", .want = "R006", .src = "const std = @import(\"std\");\nfn run(r: *std.Io.Reader, w: *std.Io.Writer) !void {\n    while (true) {\n        const n = try r.stream(w, .unlimited);\n        if (n == 0) break;\n    }\n}\ntest { _ = run; }" },
+    .{ .name = "r006_neg", .want = "", .src = "const std = @import(\"std\");\nfn run(r: *std.Io.Reader, w: *std.Io.Writer) !void {\n    while (true) {\n        const n = try r.stream(w, .unlimited);\n        if (n == 0) continue;\n    }\n}\ntest { _ = run; }" },
+    .{ .name = "r007_int", .want = "R007", .src = "test { var big: u64 = 300; _ = &big; const v: u8 = @intCast(big); _ = v; }" },
+    .{ .name = "r007_index_neg", .want = "", .src = "test { const a = [_]u8{1,2}; var i: u64 = 1; _ = &i; _ = a[@intCast(i)]; }" },
+    .{ .name = "r007_enum", .want = "R007", .src = "const E = enum(u8) { a, b };\ntest { var x: u8 = 7; _ = &x; const e: E = @enumFromInt(x); _ = e; }" },
+    .{ .name = "r007_float", .want = "R007", .src = "test { var f: f64 = 1e30; _ = &f; const i: u8 = @intFromFloat(f); _ = i; }" },
+    .{ .name = "r008_legacy", .want = "R008", .src = "const std = @import(\"std\");\ntest { var l = std.ArrayList(u8).init(std.testing.allocator); _ = &l; }" },
+    .{ .name = "r008_empty", .want = "R008", .src = "const std = @import(\"std\");\ntest { var l: std.ArrayList(u8) = .empty; try l.append(std.testing.allocator, 1); }" },
+    .{ .name = "r008_declinit", .want = "R008", .src = "const std = @import(\"std\");\ntest { var a: std.heap.ArenaAllocator = .init(std.testing.allocator); _ = a.allocator(); }" },
+    .{ .name = "r008_neg", .want = "", .src = "const std = @import(\"std\");\ntest { var l: std.ArrayList(u8) = .empty; defer l.deinit(std.testing.allocator); try l.append(std.testing.allocator, 1); }" },
+    .{ .name = "r008_file", .want = "R008", .src = "const std = @import(\"std\");\ntest { const f = try std.Io.Dir.cwd().openFile(std.testing.io, \"x\", .{}); _ = f; }" },
+    .{ .name = "r009_pos", .want = "R009", .src = "const std = @import(\"std\");\ntest { const a = std.heap.page_allocator; const b = try a.alloc(u8, 1); a.free(b); }" },
+    .{ .name = "r010_pos", .want = "R010", .src = "const std = @import(\"std\");\ntest { std.debug.print(\"x\\n\", .{}); }" },
+    .{ .name = "r006_field_neg", .want = "", .src = "const std = @import(\"std\");\nconst R = struct { stream: u8 };\nfn f(r: R, n: usize) !void { _ = r.stream; if (n == 0) return error.EndOfStream; }\ntest { _ = f; }" },
+    .{ .name = "r008_blk_neg", .want = "", .src = "const std = @import(\"std\");\nfn f(io: std.Io) !u64 {\n    const size = blk: { const file = try std.Io.Dir.cwd().openFile(io, \"x\", .{}); defer file.close(io); break :blk (try file.stat(io)).size; };\n    return size;\n}\ntest { _ = f; }" },
+    .{ .name = "r008_buf_neg", .want = "", .src = "const std = @import(\"std\");\ntest { var b: [4]u8 = undefined; var l = std.ArrayList(u8).initBuffer(&b); l.appendAssumeCapacity(1); }" },
+    .{ .name = "r008_owned_neg", .want = "", .src = "const std = @import(\"std\");\nfn f(gpa: std.mem.Allocator) ![]u8 { var l: std.ArrayList(u8) = .empty; try l.append(gpa, 1); return l.toOwnedSlice(gpa); }\ntest { _ = f; }" },
+    .{ .name = "r008_moved_neg", .want = "", .src = "const std = @import(\"std\");\nconst S = struct { l: std.ArrayList(u8) };\nfn f() S { var s: S = undefined; var l: std.ArrayList(u8) = .empty; _ = &l; s.l = l; return s; }\ntest { _ = f; }" },
+    .{ .name = "r008_global_neg", .want = "", .src = "const std = @import(\"std\");\nvar g: std.ArrayList(u8) = .empty;\ntest { _ = &g; }" },
+    .{ .name = "r008_hashmap", .want = "R008", .src = "const std = @import(\"std\");\ntest { var m: std.StringHashMapUnmanaged(u8) = .empty; try m.put(std.testing.allocator, \"a\", 1); }" },
+    .{ .name = "r008_threaded", .want = "R008", .src = "const std = @import(\"std\");\ntest { var th: std.Io.Threaded = .init(std.testing.allocator, .{}); _ = th.io(); }" },
+    .{ .name = "r014_pos", .want = "R014", .src = "const std = @import(\"std\");\npub fn main(init: std.process.Init) !void { var buf: [64]u8 = undefined; var w = std.Io.File.stdout().writer(init.io, &buf); try w.interface.flush(); }" },
+    .{ .name = "r014_err", .want = "R014", .src = "const std = @import(\"std\");\npub fn main(init: std.process.Init) !void { var buf: [64]u8 = undefined; var w = std.Io.File.stderr().writer(init.io, &buf); try w.interface.flush(); }" },
+    .{ .name = "r014_neg", .want = "", .src = "const std = @import(\"std\");\npub fn main(init: std.process.Init) !void { var buf: [64]u8 = undefined; var w = std.Io.File.stdout().writerStreaming(init.io, &buf); try w.interface.flush(); }" },
+    .{ .name = "r008_arena_neg", .want = "", .src = "const std = @import(\"std\");\ntest { var arena: std.heap.ArenaAllocator = .init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); var l: std.ArrayList(u8) = .empty; try l.append(a, 1); }" },
+    .{ .name = "r008_managed_heap", .want = "R008", .src = "const std = @import(\"std\");\ntest { var m: std.StringHashMap(u8) = .init(std.testing.allocator); try m.put(\"a\", 1); }" },
+};
+
+test "every rule case fires exactly the rules it should" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    for (rule_cases) |c| {
+        var out: std.ArrayList(snag.Finding) = .empty;
+        try snag.scan(a.allocator(), "t.zig", c.src, &out);
+        var got: std.ArrayList(u8) = .empty;
+        for (out.items) |f| {
+            const code = f.rule().code;
+            if (std.mem.find(u8, got.items, code) != null) continue;
+            if (got.items.len > 0) try got.append(a.allocator(), ',');
+            try got.appendSlice(a.allocator(), code);
+        }
+        testing.expectEqualStrings(c.want, got.items) catch |e| {
+            std.debug.print("rule case {s}\n", .{c.name});
+            return e;
+        };
+    }
 }

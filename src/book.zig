@@ -10,6 +10,7 @@
 //! companion zephem map already uses at 10 MB+ scale, needs no external binary, and removes
 //! the hand-rolled SQL quoting that was the layer's main injection hazard.
 const std = @import("std");
+const snag = @import("snag.zig");
 
 /// Dedup key is (file, rule, message, snippet) — line/col are deliberately excluded so a
 /// finding survives edits that shift it up or down the file.
@@ -43,14 +44,13 @@ pub const GROUP_CORE = "core";
 pub const GROUP_STRUCTURAL = "structural";
 pub const GROUP_MAP = "map";
 
-/// Which group a recorded rule belongs to. `R011`+ are the zephem-backed rules.
+/// Which group a recorded rule belongs to, read from zsnag's rule registry rather than
+/// inferred from the number: numbering by range broke the day a core rule (R014) was added
+/// after the map rules. An unknown code (a rule since removed) counts as core.
 pub fn groupOf(rule: []const u8) []const u8 {
     if (std.mem.eql(u8, rule, AST_RULE)) return GROUP_AST;
-    if (rule.len == 4 and rule[0] == 'R') {
-        const n = std.fmt.parseInt(u16, rule[1..], 10) catch return GROUP_CORE;
-        if (n >= 11) return GROUP_MAP;
-        // R008 needs a parse tree; it does not run on a file with a syntax error.
-        if (n == 8) return GROUP_STRUCTURAL;
+    for (snag.rules) |r| {
+        if (std.mem.eql(u8, r.code, rule)) return r.group.name();
     }
     return GROUP_CORE;
 }

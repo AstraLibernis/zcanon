@@ -35,7 +35,7 @@ no runtime dependencies: no `nu`, no `sqlite3`, no database server. The log is o
 
 | Tool | Job | Needs |
 |------|-----|-------|
-| `zig-out/bin/zsnag` | Flag the **13 mistakes an LLM makes** — 10 footgun/stale-knowledge rules, plus 3 checked against the real std via the companion zephem map | nothing (zephem optional) |
+| `zig-out/bin/zsnag` | Flag the **14 mistakes an LLM makes** — 11 footgun/stale-knowledge rules, plus 3 checked against the real std via the companion zephem map | nothing (zephem optional) |
 | `zig-out/bin/zcanon` | The PostToolUse hook (`zsnag` + `zig ast-check` on every `.zig` edit, including ones a Bash command made, findings fed back to the model and logged to the book), plus install/uninstall and the book reader | Claude Code |
 | `skill/SKILL.md` | The instruction that makes the model actually *reach for* the check every session | Claude Code |
 
