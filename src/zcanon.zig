@@ -12,19 +12,24 @@ const book = @import("book.zig");
 const report = @import("report.zig");
 const tier = @import("tier.zig");
 const setup = @import("setup.zig");
+const snag = @import("snag.zig");
+const zephem = @import("zephem.zig");
 
 const usage =
     \\zcanon <command> [args]
     \\
     \\  setup              check zephem + Claude Code, install the hook, then prove it works
     \\  doctor             the same checks as setup, changing nothing
-    \\  check <file>...    run the hook's checks on files by hand; exit 1 = something blocking
+    \\  check [--full] <file>...
+    \\                     run the hook's checks on files by hand; exit 1 = something blocking.
+    \\                     Short view by default; --full prints every message
     \\  hook               run as a PostToolUse hook (reads the payload on stdin)
     \\  install            add only the hook entry, unverified (prefer `setup`)
     \\  uninstall [--purge] remove the hook and the skill (only ours), then verify;
     \\                     --purge also deletes ~/.config/zcanon (the book)
     \\  status             is it installed, and is it enabled?
     \\  disable | enable   toggle at runtime without touching settings.json
+    \\  view [short|full]  how the hook reports findings (default short); no argument prints it
     \\  book [report]      read the book: (default) | recent [N] | files | R0NN
     \\  prune              drop findings for files that no longer exist
     \\
@@ -53,6 +58,7 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "status")) return runStatus(c);
     if (std.mem.eql(u8, cmd, "disable")) return setDisabled(c, true);
     if (std.mem.eql(u8, cmd, "enable")) return setDisabled(c, false);
+    if (std.mem.eql(u8, cmd, "view")) return runView(c, rest);
     if (std.mem.eql(u8, cmd, "book")) return runBook(c, rest);
     if (std.mem.eql(u8, cmd, "prune")) return runPrune(c);
 
@@ -60,12 +66,12 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn stdout(c: vars.Ctx, buf: []u8) std.Io.File.Writer {
-    return std.Io.File.stdout().writer(c.io, buf);
+    return std.Io.File.stdout().writerStreaming(c.io, buf);
 }
 
 fn fail(c: vars.Ctx, msg: []const u8) !void {
     var buf: [2048]u8 = undefined;
-    var w = std.Io.File.stderr().writer(c.io, &buf);
+    var w = std.Io.File.stderr().writerStreaming(c.io, &buf);
     try w.interface.writeAll(msg);
     try w.interface.flush();
     std.process.exit(2);
@@ -111,28 +117,41 @@ fn runHook(c: vars.Ctx) !void {
     }
     if (paths.items.len == 0 and walk_notice.len == 0) return;
 
+    const view: hook.View = if (exists(c, try vars.fullViewFlagPath(c))) .full else .short;
     var body: std.Io.Writer.Allocating = .init(c.gpa);
     var notices: std.ArrayList([]const u8) = .empty;
     if (walk_notice.len > 0) try notices.append(c.gpa, walk_notice);
-    for (paths.items) |path| {
-        const a = (try analyze(c, path)) orelse continue;
-        if (try hook.renderContext(c.gpa, a.base, path, a.findings)) |b| {
+    var hint = false;
+
+    const files = try readAll(c, paths.items);
+    var run = try Run.init(c, files);
+    try addNotices(c.gpa, &notices, run.notices.items);
+    for (files) |f| {
+        const src = f.src orelse continue;
+        const a = try run.analyze(f.path, src);
+        if (try hook.renderContext(c.gpa, std.fs.path.basename(f.path), f.path, a.findings, view)) |b| {
             if (body.written().len > 0) try body.writer.writeAll("\n\n");
             try body.writer.writeAll(b);
         }
-        for ([_][]const u8{ a.notice, a.book_notice }) |n| {
-            if (n.len == 0) continue;
-            for (notices.items) |seen| {
-                if (std.mem.eql(u8, seen, n)) break;
-            } else try notices.append(c.gpa, n);
-        }
+        if (hook.wantsHint(view, a.findings)) hint = true;
+        try addNotices(c.gpa, &notices, &.{a.book_notice});
     }
-    const ctx = (try hook.compose(c.gpa, body.written(), notices.items)) orelse return;
+    const ctx = (try hook.compose(c.gpa, body.written(), notices.items, hint)) orelse return;
 
     var out_buf: [1 << 16]u8 = undefined;
     var w = stdout(c, &out_buf);
     try w.interface.writeAll(try hook.renderResponse(c.gpa, ctx));
     try w.interface.flush();
+}
+
+/// Append each non-empty notice not already present.
+fn addNotices(gpa: std.mem.Allocator, notices: *std.ArrayList([]const u8), new: []const []const u8) !void {
+    for (new) |n| {
+        if (n.len == 0) continue;
+        for (notices.items) |seen| {
+            if (std.mem.eql(u8, seen, n)) break;
+        } else try notices.append(gpa, n);
+    }
 }
 
 /// Most `.zig` files one Bash run is checked for, and most directory entries walked to find
@@ -197,114 +216,161 @@ fn touch(c: vars.Ctx, path: []const u8) void {
     std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = "" }) catch {}; // zsnag:ok — best-effort, see doc comment
 }
 
+const File = struct { path: []const u8, src: ?[:0]const u8 };
+
+/// Read every file up front: the zephem map is then loaded once, with only the paths these
+/// files reference. `src` is null for a file that cannot be read.
+fn readAll(c: vars.Ctx, paths: []const []const u8) ![]File {
+    const files = try c.gpa.alloc(File, paths.len);
+    for (paths, files) |p, *f| f.* = .{
+        .path = p,
+        .src = std.Io.Dir.cwd().readFileAllocOptions(c.io, p, c.gpa, .unlimited, .of(u8), 0) catch null,
+    };
+    return files;
+}
+
 const Analysis = struct {
-    base: []const u8,
     findings: []hook.Finding,
-    notice: []const u8,
     book_notice: []const u8,
 };
 
-/// The check itself, shared by the Claude Code hook and `zcanon check`: zsnag + `zig ast-check`
-/// on one file, deduped, sorted, and recorded to the book. Null when the file can't be read.
-fn analyze(c: vars.Ctx, path: []const u8) !?Analysis {
-    const src = std.Io.Dir.cwd().readFileAlloc(c.io, path, c.gpa, .unlimited) catch return null;
+/// State shared by every file one hook run or `zcanon check` looks at: the map, the rules the
+/// map has disabled, and the zig version, each computed once.
+///
+/// The linter runs in-process. zcanon used to spawn zsnag per file and parse its JSONL back,
+/// which re-indexed the whole zephem lookup table for every file checked.
+const Run = struct {
+    c: vars.Ctx,
+    map: ?zephem.Map,
+    stale: []const snag.Id,
+    zver: []const u8,
+    /// Why a check did not run, or ran against a stale map. "No findings" must never be
+    /// indistinguishable from "never checked".
+    notices: std.ArrayList([]const u8),
 
-    var findings: std.ArrayList(hook.Finding) = .empty;
+    fn init(c: vars.Ctx, files: []const File) !Run {
+        var r: Run = .{ .c = c, .map = null, .stale = &.{}, .zver = zigVersion(c), .notices = .empty };
+        var keys: zephem.Keys = .empty;
+        for (files) |f| if (f.src) |src| try snag.mapKeys(c.gpa, src, &keys);
+        if (zephem.load(c, &keys)) |m| {
+            r.map = m;
+            if (try zephem.staleness(c, r.zver)) |warn|
+                try r.notices.append(c.gpa, try std.fmt.allocPrint(c.gpa, "\n\n{s}", .{warn}));
+            r.stale = try snag.stalePremises(c.gpa, &r.map.?);
+            for (r.stale) |id| try r.notices.append(c.gpa, try std.fmt.allocPrint(
+                c.gpa,
+                "\n\n⚠ rule {s} is DISABLED — the map contradicts its premise: {s}",
+                .{ snag.ruleOf(id).code, snag.ruleOf(id).premise },
+            ));
+        } else |e| try r.notices.append(c.gpa, try std.fmt.allocPrint(
+            c.gpa,
+            "\n\n⚠ R011/R012/R013 (the zephem map rules) did NOT run — {s}",
+            .{switch (e) {
+                error.NoLookupTable => zephem.remedy,
+                error.ZephemNotFound => "zephem not found; run `zcanon setup`",
+                else => @errorName(e),
+            }},
+        ));
+        return r;
+    }
 
-    // zsnag lives beside this binary. If it is missing we say so loudly in-band rather than
-    // skipping silently — "no findings" must never be indistinguishable from "never checked".
-    const zsnag_path = try vars.zsnagPath(c);
+    /// zsnag + `zig ast-check` on one file, deduped, sorted, and recorded to the book.
+    fn analyze(r: *Run, path: []const u8, src: [:0]const u8) !Analysis {
+        const c = r.c;
+        var findings: std.ArrayList(hook.Finding) = .empty;
 
-    // Which rule groups actually ran. zsnag REPORTS this in its status record rather than
-    // us inferring it from an exit code — inference is what let a failed zephem map load look
-    // like "the map rules found nothing", which then erased their history from the book.
-    var active: std.ArrayList([]const u8) = .empty;
-    var notice: []const u8 = "";
-    if (exists(c, zsnag_path)) {
-        const r = std.process.run(c.gpa, c.io, .{ .argv = &.{ zsnag_path, "--json", path } }) catch null;
-        if (r) |res| {
-            const usable = switch (res.term) {
-                // 0 = clean, 1 = error-severity findings. 3 = a file could not be read, and
-                // 2 = usage; neither is a scan whose absence of findings means anything.
-                .exited => |code| code == 0 or code == 1,
-                else => false,
-            };
-            if (usable) {
-                try hook.parseSnagJson(c.gpa, res.stdout, &findings, &active);
-                try hook.parseSnagJson(c.gpa, res.stderr, &findings, &active);
+        // Which rule groups actually ran: the book prunes a file's history only for those, so
+        // a group that did not run cannot erase its own record.
+        var active: std.ArrayList([]const u8) = .empty;
+        var snags: std.ArrayList(snag.Finding) = .empty;
+        var parsed = false;
+        try snag.scanWithOpts(c.gpa, path, src, &snags, .{
+            .map = if (r.map) |*m| m else null,
+            .ran_structural = &parsed,
+            .stale = r.stale,
+        });
+        try active.append(c.gpa, book.GROUP_CORE);
+        if (parsed) try active.append(c.gpa, book.GROUP_STRUCTURAL);
+        if (r.map != null) try active.append(c.gpa, book.GROUP_MAP);
+        for (snags.items) |f| try findings.append(c.gpa, .{
+            .rule = f.rule().code,
+            .severity = f.rule().sev.name(),
+            .line = f.line,
+            .col = f.col,
+            .message = f.msg,
+        });
+
+        if (std.process.run(c.gpa, c.io, .{ .argv = &.{ "zig", "ast-check", path } }) catch null) |res| {
+            // Only a normal exit counts. A killed or signalled ast-check produces no diagnostics,
+            // and treating that as "ran" erased the file's whole ast history from the book.
+            switch (res.term) {
+                .exited => {
+                    try active.append(c.gpa, book.GROUP_AST);
+                    try hook.parseAstCheck(c.gpa, path, res.stderr, &findings);
+                },
+                else => {},
             }
         }
-    } else {
-        notice = try std.fmt.allocPrint(
-            c.gpa,
-            "\n\n⚠ zsnag was NOT run: no binary at {s}. Footgun checks did not happen — " ++
-                "build it with `zig build` in the zcanon repo.",
-            .{zsnag_path},
-        );
+
+        // Dedup on the book's key before anything consumes the list — otherwise a duplicate
+        // renders twice and double-counts `hits`.
+        const deduped = try hook.dedup(c.gpa, src, findings.items);
+        hook.sortFindings(deduped);
+
+        // The book is best-effort. A write failure (or error.NegativeTimestamp from a bad clock)
+        // must not propagate: a non-zero exit surfaces as a hook ERROR with no findings, which is
+        // the opposite of the always-report invariant above. Say so in-band instead.
+        var book_notice: []const u8 = "";
+        recordToBook(c, path, src, deduped, active.items, r.zver) catch |e| {
+            book_notice = std.fmt.allocPrint(
+                c.gpa,
+                "\n\n⚠ the book was not updated ({s}) — findings above are still valid.",
+                .{@errorName(e)},
+            ) catch "";
+        };
+        return .{ .findings = deduped, .book_notice = book_notice };
     }
-
-    if (std.process.run(c.gpa, c.io, .{ .argv = &.{ "zig", "ast-check", path } }) catch null) |res| {
-        // Only a normal exit counts. A killed or signalled ast-check produces no diagnostics,
-        // and treating that as "ran" erased the file's whole ast history from the book.
-        switch (res.term) {
-            .exited => {
-                try active.append(c.gpa, book.GROUP_AST);
-                try hook.parseAstCheck(c.gpa, path, res.stderr, &findings);
-            },
-            else => {},
-        }
-    }
-
-    // Dedup on the book's key before anything consumes the list, matching the Nushell
-    // original — otherwise a duplicate renders twice and double-counts `hits`.
-    const deduped = try hook.dedup(c.gpa, src, findings.items);
-    hook.sortFindings(deduped);
-
-    // The book is best-effort. A write failure (or error.NegativeTimestamp from a bad clock)
-    // must not propagate: a non-zero exit surfaces as a hook ERROR with no findings, which is
-    // the opposite of the always-report invariant above. Say so in-band instead.
-    var book_notice: []const u8 = "";
-    recordToBook(c, path, src, deduped, active.items) catch |e| {
-        book_notice = std.fmt.allocPrint(
-            c.gpa,
-            "\n\n⚠ the book was not updated ({s}) — findings above are still valid.",
-            .{@errorName(e)},
-        ) catch "";
-    };
-
-    return .{
-        .base = std.fs.path.basename(path),
-        .findings = deduped,
-        .notice = notice,
-        .book_notice = book_notice,
-    };
-}
+};
 
 // ---- check: the same analysis, for any agent ------------------------------
 // Agents without Claude Code's hook system can run this after each edit. Findings go to
 // stdout in the same grouped form the hook feeds Claude; exit 1 means something BLOCKING.
 
-fn runCheck(c: vars.Ctx, files: []const []const u8) !void {
-    if (files.len == 0) return fail(c, "usage: zcanon check <file.zig>...\n");
+fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
+    var view: hook.View = .short;
+    var paths: std.ArrayList([]const u8) = .empty;
+    for (args) |a| {
+        if (std.mem.eql(u8, a, "--full")) view = .full else try paths.append(c.gpa, a);
+    }
+    if (paths.items.len == 0) return fail(c, "usage: zcanon check [--full] <file.zig>...\n");
     var buf: [1 << 16]u8 = undefined;
     var w = stdout(c, &buf);
     var blocking = false;
     var unreadable = false;
-    for (files) |path| {
-        const a = (try analyze(c, path)) orelse {
-            try w.interface.print("{s}: cannot read file\n", .{path});
+
+    const files = try readAll(c, paths.items);
+    var run = try Run.init(c, files);
+    for (run.notices.items) |n| try w.interface.print("{s}\n", .{std.mem.trimStart(u8, n, "\n")});
+    var hint = false;
+    for (files) |f| {
+        const src = f.src orelse {
+            try w.interface.print("{s}: cannot read file\n", .{f.path});
             unreadable = true;
             continue;
         };
-        for (a.findings) |f| {
-            if (tier.classify(f.severity, path) == .blocking) blocking = true;
+        const a = try run.analyze(f.path, src);
+        for (a.findings) |finding| {
+            if (tier.classify(finding.severity, f.path) == .blocking) blocking = true;
         }
-        if (try hook.renderContext(c.gpa, a.base, path, a.findings)) |body| {
-            try w.interface.print("{s}{s}{s}\n", .{ body, a.notice, a.book_notice });
+        if (hook.wantsHint(view, a.findings)) hint = true;
+        const base = std.fs.path.basename(f.path);
+        if (try hook.renderContext(c.gpa, base, f.path, a.findings, view)) |body| {
+            try w.interface.print("{s}{s}\n", .{ body, a.book_notice });
         } else {
-            try w.interface.print("{s}: no findings{s}{s}\n", .{ a.base, a.notice, a.book_notice });
+            try w.interface.print("{s}: no findings{s}\n", .{ base, a.book_notice });
         }
     }
+    if (hint) try w.interface.print("{s}\n", .{std.mem.trimStart(u8, hook.HINT, "\n")});
     try w.interface.flush();
     if (unreadable) std.process.exit(3);
     if (blocking) std.process.exit(1);
@@ -316,6 +382,7 @@ fn recordToBook(
     src: []const u8,
     findings: []const hook.Finding,
     active: []const []const u8,
+    zver: []const u8,
 ) !void {
     var b: book.Book = .init(c.gpa);
     const book_path = try vars.bookPath(c);
@@ -325,7 +392,6 @@ fn recordToBook(
 
     var stamp_buf: [20]u8 = undefined;
     const now = try book.stamp(&stamp_buf, book.nowSeconds(c.io));
-    const zver = zigVersion(c);
 
     var fresh: std.ArrayList(book.Record) = .empty;
     for (findings) |f| {
@@ -395,10 +461,11 @@ fn runStatus(c: vars.Ctx) !void {
     var w = stdout(c, &buf);
     try w.interface.print("installed in settings: {}\n", .{installed});
     try w.interface.print("runtime state: {s}\n", .{if (enabled) "enabled" else "disabled"});
-    try w.interface.print("zsnag binary: {s}{s}\n", .{
+    try w.interface.print("zsnag binary (the standalone linter): {s}{s}\n", .{
         zsnag_path,
-        if (exists(c, zsnag_path)) "" else "   ← MISSING, footgun checks will not run",
+        if (exists(c, zsnag_path)) "" else "   ← missing; the hook does not need it",
     });
+    try w.interface.print("hook view: {s}\n", .{if (exists(c, try vars.fullViewFlagPath(c))) "full" else "short"});
     try w.interface.print("book: {s}{s}\n", .{
         book_path,
         if (exists(c, book_path)) "" else "   (empty — nothing recorded yet)",
@@ -421,6 +488,34 @@ fn setDisabled(c: vars.Ctx, off: bool) !void {
     var buf: [256]u8 = undefined;
     var w = stdout(c, &buf);
     try w.interface.print("hook {s} (settings.json untouched)\n", .{if (off) "disabled" else "enabled"});
+    try w.interface.flush();
+}
+
+fn runView(c: vars.Ctx, args: []const []const u8) !void {
+    const flag = try vars.fullViewFlagPath(c);
+    var buf: [256]u8 = undefined;
+    var w = stdout(c, &buf);
+    if (args.len == 0) {
+        try w.interface.print("hook view: {s}\n", .{if (exists(c, flag)) "full" else "short"});
+        return w.interface.flush();
+    }
+    const full = if (std.mem.eql(u8, args[0], "full"))
+        true
+    else if (std.mem.eql(u8, args[0], "short"))
+        false
+    else
+        return fail(c, "usage: zcanon view [short|full]\n");
+    const dir = std.fs.path.dirname(flag) orelse ".";
+    try std.Io.Dir.cwd().createDirPath(c.io, dir);
+    if (full) {
+        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = flag, .data = "" });
+    } else {
+        std.Io.Dir.cwd().deleteFile(c.io, flag) catch |e| switch (e) {
+            error.FileNotFound => {},
+            else => return e,
+        };
+    }
+    try w.interface.print("hook view: {s} (settings.json untouched)\n", .{args[0]});
     try w.interface.flush();
 }
 

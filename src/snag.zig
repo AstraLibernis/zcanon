@@ -614,6 +614,49 @@ fn scanStreamZero(st: Scanner, t: []const Tk) !void {
     }
 }
 
+/// The dotted chain rooted at a bare `std` token at `i` (`std.a.b`, up to the first thing that
+/// is not `.ident`), written into `buf`. Returns the token index just past it, or null when
+/// `t[i]` is not such a root. Shared by the scan and by `mapKeys`, so the map is loaded with
+/// exactly the paths the scan will ask for.
+fn stdChain(gpa: std.mem.Allocator, src: []const u8, t: []const Tk, i: usize, buf: *std.ArrayList(u8)) !?usize {
+    if (t[i].tag != .identifier or !eq(src[t[i].start..t[i].end], "std")) return null;
+    // Must be a root reference, not the tail of some other selector chain.
+    if (i > 0 and t[i - 1].tag == .period) return null;
+
+    buf.clearRetainingCapacity();
+    try buf.appendSlice(gpa, "std");
+    var j = i + 1;
+    while (j + 1 < t.len and t[j].tag == .period and t[j + 1].tag == .identifier) : (j += 2) {
+        try buf.append(gpa, '.');
+        try buf.appendSlice(gpa, src[t[j + 1].start..t[j + 1].end]);
+    }
+    return j;
+}
+
+/// Paths `stalePremises` looks up.
+const premise_keys = [_][]const u8{ "std.mem.copy", "std.mem.set" };
+
+/// Every map path a scan of `src` can query: each std chain, all its proper prefixes (for
+/// `longestPrefixKind`), and the premise self-check paths. Pass the set to `zephem.load`.
+pub fn mapKeys(gpa: std.mem.Allocator, src: [:0]const u8, keys: *zephem.Keys) !void {
+    for (premise_keys) |k| try zephem.addKey(gpa, keys, k);
+    const t = try lex(gpa, src);
+    defer gpa.free(t);
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(gpa);
+    var i: usize = 0;
+    while (i < t.len) : (i += 1) {
+        const j = (try stdChain(gpa, src, t, i, &buf)) orelse continue;
+        // Down to `std` itself: `longestPrefixKind` can stop there too.
+        var end = buf.items.len;
+        while (true) {
+            try zephem.addKey(gpa, keys, buf.items[0..end]);
+            end = std.mem.findScalarLast(u8, buf.items[0..end], '.') orelse break;
+        }
+        i = j;
+    }
+}
+
 /// R011/R012/R013 — the map-backed rules.
 ///
 /// Resolves only a plain dotted chain (`std` `.` ident `.` ident …) and stops at the first
@@ -623,21 +666,11 @@ fn scanStreamZero(st: Scanner, t: []const Tk) !void {
 /// parameter is implicit and its arity cannot be compared against the map's signature.
 /// Guessing there would produce false positives on ordinary method-call style.
 fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const zephem.Map, check_existence: bool) !void {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(gpa);
     var i: usize = 0;
     while (i < t.len) : (i += 1) {
-        if (t[i].tag != .identifier or !eq(st.text(t[i]), "std")) continue;
-        // Must be a root reference, not the tail of some other selector chain.
-        if (i > 0 and t[i - 1].tag == .period) continue;
-
-        var buf: std.ArrayList(u8) = .empty;
-        defer buf.deinit(gpa);
-        try buf.appendSlice(gpa, "std");
-
-        var j = i + 1;
-        while (j + 1 < t.len and t[j].tag == .period and t[j + 1].tag == .identifier) : (j += 2) {
-            try buf.append(gpa, '.');
-            try buf.appendSlice(gpa, st.text(t[j + 1]));
-        }
+        const j = (try stdChain(gpa, st.src, t, i, &buf)) orelse continue;
         // `std` alone carries no claim to check.
         if (buf.items.len == 3) {
             i = j;
@@ -733,7 +766,7 @@ fn countArgs(t: []const Tk, open: usize) ?usize {
 /// integration exists to stop.
 pub fn stalePremises(gpa: std.mem.Allocator, map: *const zephem.Map) ![]const Id {
     var stale: std.ArrayList(Id) = .empty;
-    if (map.get("std.mem.copy") != null or map.get("std.mem.set") != null)
+    if (map.get(premise_keys[0]) != null or map.get(premise_keys[1]) != null)
         try stale.append(gpa, .r003_mem_copy);
     return stale.items;
 }

@@ -41,57 +41,6 @@ test "a payload without a usable file_path yields null, never a crash" {
     }
 }
 
-test "zsnag JSONL parses, and non-JSON lines are skipped" {
-    var a = arena();
-    defer a.deinit();
-    var out: std.ArrayList(hook.Finding) = .empty;
-    const text =
-        \\{"file":"a.zig","line":2,"col":1,"rule":"R002","severity":"error","message":"usingnamespace was removed"}
-        \\usage: zsnag [--json] file.zig ...
-        \\{"file":"a.zig","line":24,"col":21,"rule":"R004","severity":"warn","message":"catch unreachable"}
-        \\
-    ;
-    try hook.parseSnagJson(a.allocator(), text, &out, null);
-
-    try testing.expectEqual(@as(usize, 2), out.items.len);
-    try testing.expectEqualStrings("R002", out.items[0].rule);
-    try testing.expectEqual(@as(u32, 2), out.items[0].line);
-    try testing.expectEqualStrings("warn", out.items[1].severity);
-    try testing.expectEqual(@as(u32, 21), out.items[1].col);
-}
-
-test "the status record reports which rule groups ran" {
-    var a = arena();
-    defer a.deinit();
-    var out: std.ArrayList(hook.Finding) = .empty;
-    var groups: std.ArrayList([]const u8) = .empty;
-    const text =
-        \\{"zsnag":"status","ran":["core","map"]}
-        \\{"file":"a.zig","line":2,"col":1,"rule":"R011","severity":"warn","message":"deprecated"}
-        \\
-    ;
-    try hook.parseSnagJson(a.allocator(), text, &out, &groups);
-
-    try testing.expectEqual(@as(usize, 2), groups.items.len);
-    try testing.expectEqualStrings("core", groups.items[0]);
-    try testing.expectEqualStrings("map", groups.items[1]);
-    // The status record is not itself a finding.
-    try testing.expectEqual(@as(usize, 1), out.items.len);
-}
-
-test "a status record reporting only core leaves map inactive" {
-    var a = arena();
-    defer a.deinit();
-    var out: std.ArrayList(hook.Finding) = .empty;
-    var groups: std.ArrayList([]const u8) = .empty;
-    // What zsnag emits when the zephem map could not be loaded.
-    try hook.parseSnagJson(a.allocator(), "{\"zsnag\":\"status\",\"ran\":[\"core\"]}\n", &out, &groups);
-
-    try testing.expectEqual(@as(usize, 1), groups.items.len);
-    try testing.expectEqualStrings("core", groups.items[0]);
-    try testing.expectEqual(@as(usize, 0), out.items.len);
-}
-
 test "ast-check: a path containing a colon still parses (B8)" {
     var a = arena();
     defer a.deinit();
@@ -174,7 +123,7 @@ test "context groups by tier in urgency order" {
         .{ .rule = "R002", .severity = "error", .line = 10, .col = 1, .message = "blocking thing" },
         .{ .rule = "R004", .severity = "warn", .line = 20, .col = 1, .message = "caution thing" },
     };
-    const ctx = (try hook.renderContext(a.allocator(), "main.zig", "src/main.zig", &findings)).?;
+    const ctx = (try hook.renderContext(a.allocator(), "main.zig", "src/main.zig", &findings, .full)).?;
 
     const b = std.mem.find(u8, ctx, "blocking thing").?;
     const c = std.mem.find(u8, ctx, "caution thing").?;
@@ -191,7 +140,7 @@ test "an advisory finding in scratch code renders under EXPECTED" {
     const findings = [_]hook.Finding{
         .{ .rule = "R010", .severity = "info", .line = 5, .col = 1, .message = "debug print" },
     };
-    const ctx = (try hook.renderContext(a.allocator(), "x.zig", "/tmp/x.zig", &findings)).?;
+    const ctx = (try hook.renderContext(a.allocator(), "x.zig", "/tmp/x.zig", &findings, .full)).?;
     try testing.expect(std.mem.find(u8, ctx, "· EXPECTED") != null);
     try testing.expect(std.mem.find(u8, ctx, "ℹ ADVISORY") == null);
 }
@@ -199,7 +148,7 @@ test "an advisory finding in scratch code renders under EXPECTED" {
 test "no findings means no context at all" {
     var a = arena();
     defer a.deinit();
-    try testing.expect((try hook.renderContext(a.allocator(), "x.zig", "x.zig", &.{})) == null);
+    try testing.expect((try hook.renderContext(a.allocator(), "x.zig", "x.zig", &.{}, .full)) == null);
 }
 
 test "context is truncated to the cap" {
@@ -215,8 +164,8 @@ test "context is truncated to the cap" {
             .message = "this cast can panic/corrupt if out of range; verify first.",
         });
     }
-    const body = (try hook.renderContext(a.allocator(), "big.zig", "src/big.zig", many.items)).?;
-    const ctx = (try hook.compose(a.allocator(), body, &.{})).?;
+    const body = (try hook.renderContext(a.allocator(), "big.zig", "src/big.zig", many.items, .full)).?;
+    const ctx = (try hook.compose(a.allocator(), body, &.{}, true)).?;
 
     try testing.expect(ctx.len <= hook.MAX_CONTEXT);
     // The hint must survive truncation — it is what tells the reader how to check an API.
@@ -243,7 +192,7 @@ test "notices are reserved from the budget, not truncated away" {
     @memset(body, 'x');
     const notice = "\n\n⚠ zsnag was NOT run.";
 
-    const ctx = (try hook.compose(a.allocator(), body, &.{notice})).?;
+    const ctx = (try hook.compose(a.allocator(), body, &.{notice}, true)).?;
     try testing.expect(ctx.len <= hook.MAX_CONTEXT);
     try testing.expect(std.mem.find(u8, ctx, "zsnag was NOT run") != null);
     try testing.expect(std.mem.endsWith(u8, ctx, hook.HINT));
@@ -253,7 +202,7 @@ test "a notice with no findings is emitted exactly once" {
     var a = arena();
     defer a.deinit();
     const notice = "\n\n⚠ zsnag was NOT run.";
-    const ctx = (try hook.compose(a.allocator(), "", &.{ notice, "" })).?;
+    const ctx = (try hook.compose(a.allocator(), "", &.{ notice, "" }, true)).?;
 
     var n: usize = 0;
     var i: usize = 0;
@@ -264,8 +213,9 @@ test "a notice with no findings is emitted exactly once" {
 test "nothing to say composes to null" {
     var a = arena();
     defer a.deinit();
-    try testing.expect((try hook.compose(a.allocator(), "", &.{})) == null);
-    try testing.expect((try hook.compose(a.allocator(), "", &.{ "", "" })) == null);
+    try testing.expect((try hook.compose(a.allocator(), "", &.{}, true)) == null);
+    try testing.expect((try hook.compose(a.allocator(), "", &.{ "", "" }, true)) == null);
+    try testing.expect((try hook.compose(a.allocator(), "", &.{}, false)) == null);
 }
 
 test "response uses the nested hookSpecificOutput form" {
@@ -378,4 +328,75 @@ test "roots: a working directory nested in a cd target is dropped, duplicates co
 
 test "roots: `cd -` and a bare trailing cd add nothing" {
     try expectRoots(&.{"/home/u/ws"}, "/home/u/ws", "cd - && echo cd");
+}
+
+// ---- the short view ---------------------------------------------------------
+
+test "short view: tally, one row per blocking/caution finding, advisory collapsed" {
+    var a = arena();
+    defer a.deinit();
+    const findings = [_]hook.Finding{
+        .{ .rule = "R002", .severity = "error", .line = 2, .col = 1, .message = "blocking thing" },
+        .{ .rule = "R007", .severity = "info", .line = 9, .col = 3, .message = "advisory thing" },
+        .{ .rule = "R004", .severity = "warn", .line = 20, .col = 4, .message = "caution thing" },
+        .{ .rule = "R007", .severity = "info", .line = 30, .col = 3, .message = "advisory thing" },
+        .{ .rule = "R010", .severity = "info", .line = 40, .col = 1, .message = "other advisory" },
+    };
+    const ctx = (try hook.renderContext(a.allocator(), "main.zig", "src/main.zig", &findings, .short)).?;
+    try testing.expectEqualStrings(
+        "zcanon: main.zig — 1 blocking, 1 caution, 3 advisory\n" ++
+            "▲ [R002] 2:1  blocking thing\n" ++
+            "⚠ [R004] 20:4  caution thing\n" ++
+            "ℹ advisory: [R007]×2 9,30 · [R010] 40\n" ++
+            "full messages: zcanon check --full src/main.zig",
+        ctx,
+    );
+}
+
+test "short view: scratch-file advisories collapse under expected" {
+    var a = arena();
+    defer a.deinit();
+    const findings = [_]hook.Finding{
+        .{ .rule = "R010", .severity = "info", .line = 5, .col = 1, .message = "debug print" },
+    };
+    const ctx = (try hook.renderContext(a.allocator(), "x.zig", "/tmp/x.zig", &findings, .short)).?;
+    try testing.expect(std.mem.find(u8, ctx, "· expected (test/bench code): [R010] 5") != null);
+    try testing.expect(std.mem.find(u8, ctx, "debug print") == null);
+}
+
+test "short view: a long message is cut, on a UTF-8 boundary, with an ellipsis" {
+    var a = arena();
+    defer a.deinit();
+    const long = "▲" ** 200; // 600 bytes of three-byte codepoints
+    const findings = [_]hook.Finding{
+        .{ .rule = "R012", .severity = "warn", .line = 1, .col = 1, .message = long },
+    };
+    const ctx = (try hook.renderContext(a.allocator(), "x.zig", "x.zig", &findings, .short)).?;
+    try testing.expect(std.unicode.utf8ValidateSlice(ctx));
+    try testing.expect(std.mem.endsWith(u8, ctx, "…"));
+    try testing.expect(ctx.len < long.len);
+}
+
+test "short view: many findings of one rule stay on one line" {
+    var a = arena();
+    defer a.deinit();
+    var many: std.ArrayList(hook.Finding) = .empty;
+    for (0..2000) |i| try many.append(a.allocator(), .{
+        .rule = "R007",
+        .severity = "info",
+        .line = @intCast(i + 1),
+        .col = 1,
+        .message = "this cast can panic/corrupt if out of range; verify first.",
+    });
+    const ctx = (try hook.renderContext(a.allocator(), "big.zig", "big.zig", many.items, .short)).?;
+    try testing.expect(std.mem.find(u8, ctx, "[R007]×2000 1,2,3,4,5,6 …") != null);
+    try testing.expect(ctx.len < 200);
+}
+
+test "the lookup hint: always in the full view, only for map rules in the short one" {
+    const core = [_]hook.Finding{.{ .rule = "R004", .severity = "warn", .line = 1, .col = 1, .message = "m" }};
+    const map = [_]hook.Finding{.{ .rule = "R012", .severity = "warn", .line = 1, .col = 1, .message = "m" }};
+    try testing.expect(hook.wantsHint(.full, &core));
+    try testing.expect(!hook.wantsHint(.short, &core));
+    try testing.expect(hook.wantsHint(.short, &map));
 }

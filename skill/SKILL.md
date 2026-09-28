@@ -45,6 +45,11 @@ file modified since the previous tool call, under the working directory and any 
 - `zig ast-check` — real syntax/compile errors
 - `zsnag` — known LLM footguns (the list below)
 
+It reports in a **short view**: a tally line, one row per blocking (`▲`) or caution (`⚠`)
+finding, and the advisory tiers collapsed to rule + line numbers. For every message, run
+`{{ZCANON}} check --full <file.zig>`; `{{ZCANON}} view full` switches the hook itself to the full
+layout (`view short` switches back).
+
 It is installed and verified by one command, `{{ZCANON}} setup`, which checks zephem, checks
 that it can hook into Claude Code, installs the hook, then runs it on a probe file to prove the
 core rules, the zephem map rules and `zig ast-check` all fire. If findings stop appearing, run
@@ -52,7 +57,7 @@ core rules, the zephem map rules and `zig ast-check` all fire. If findings stop 
 **Do not read "no findings" as "no problems"** unless `doctor` passes.
 
 Read the findings and fix them before moving on. To check a file by hand at any time:
-`{{ZCANON}} check <file.zig>` (the hook's exact checks; exit 1 = something blocking) or
+`{{ZCANON}} check [--full] <file.zig>` (the hook's exact checks; exit 1 = something blocking) or
 `{{ZSNAG}} <file.zig>` (the linter alone).
 
 Findings that survive are recorded to the book (`~/.config/zcanon/book.tsv`), so `hits` counts
@@ -105,8 +110,9 @@ go stale the way a hardcoded "use X instead" does:
 - **R013** — a fully-qualified `std.*` path with no map entry: it may not exist. Advisory,
   because the resolver is deliberately conservative.
 
-They run whenever zephem's lookup table is present. If it is missing, zsnag says so on stderr
-and the other ten rules still run — it never silently drops them. Disable with `--no-map`.
+They run whenever zephem's lookup table is present. If it is missing, the hook and `check` say
+so in their output (zsnag on stderr) and the other ten rules still run — they never silently
+drop them. zsnag's `--no-map` disables them.
 
 Two limits worth knowing, so you read the output correctly: the resolver stops at the first
 call, so `std.Io.Dir.cwd().readFileAlloc(…)` is checked as `std.Io.Dir.cwd` only (a method on

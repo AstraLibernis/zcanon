@@ -3,7 +3,8 @@
 
 //! The PostToolUse hook: read the tool payload, check the edited .zig file with zsnag and
 //! `zig ast-check`, record what survives to the book, and feed the findings back grouped by
-//! priority. Nothing is hidden — the tier only labels urgency.
+//! priority. The tier only labels urgency. The short view (the default) collapses the
+//! advisory tiers to rule + line; the full view prints every message.
 const std = @import("std");
 const vars = @import("vars.zig");
 const tier = @import("tier.zig");
@@ -123,59 +124,9 @@ fn within(inner: []const u8, outer: []const u8) bool {
     return std.mem.eql(u8, outer, "/") or inner[outer.len] == '/';
 }
 
-/// zsnag emits JSONL — a status record, then one object per finding. Lines that aren't
-/// objects are skipped.
-///
-/// `groups` collects the rule groups zsnag reports as having actually run. The caller must
-/// prune the book only for those: zsnag exits 0 even when the zephem map failed to load, so
-/// "no map findings" and "the map rules never ran" are otherwise indistinguishable.
-pub fn parseSnagJson(
-    arena: std.mem.Allocator,
-    text: []const u8,
-    out: *std.ArrayList(Finding),
-    groups: ?*std.ArrayList([]const u8),
-) !void {
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    while (lines.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r");
-        if (line.len == 0 or line[0] != '{') continue;
-        const v = std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) catch continue;
-        const o = switch (v) {
-            .object => |x| x,
-            else => continue,
-        };
-        if (strField(o, "zsnag")) |kind| {
-            if (std.mem.eql(u8, kind, "status")) {
-                if (groups) |g| switch (o.get("ran") orelse std.json.Value.null) {
-                    .array => |arr| for (arr.items) |item| switch (item) {
-                        .string => |s| try g.append(arena, s),
-                        else => {},
-                    },
-                    else => {},
-                };
-                continue;
-            }
-        }
-        try out.append(arena, .{
-            .rule = strField(o, "rule") orelse continue,
-            .severity = strField(o, "severity") orelse "info",
-            .line = intField(o, "line") orelse 0,
-            .col = intField(o, "col") orelse 0,
-            .message = strField(o, "message") orelse continue,
-        });
-    }
-}
-
 fn strField(o: std.json.ObjectMap, name: []const u8) ?[]const u8 {
     return switch (o.get(name) orelse return null) {
         .string => |s| s,
-        else => null,
-    };
-}
-
-fn intField(o: std.json.ObjectMap, name: []const u8) ?u32 {
-    return switch (o.get(name) orelse return null) {
-        .integer => |i| if (i >= 0 and i <= std.math.maxInt(u32)) @intCast(i) else null, // zsnag:ok — range-checked
         else => null,
     };
 }
@@ -254,14 +205,96 @@ pub fn snippetFor(src: []const u8, line_no: u32) []const u8 {
     return std.mem.trim(u8, src[start..end], " \t\r");
 }
 
+pub const View = enum { short, full };
+
+/// Longest message a short-view row prints before it is cut with `…`. A deprecation doc or
+/// a long signature can run to several hundred bytes; the full view keeps them whole.
+pub const SHORT_MSG = 200;
+
+/// Most line numbers listed per rule on a collapsed advisory row.
+const SHORT_LINES = 6;
+
+/// The short view: a one-line tally, then one row per blocking or caution finding, then the
+/// advisory and expected tiers collapsed to rule + lines. The full view (`renderContext`
+/// with `.full`, `zcanon check --full`) prints every message.
+fn renderShort(arena: std.mem.Allocator, base: []const u8, file: []const u8, findings: []const Finding) ![]const u8 {
+    var counts: [4]usize = @splat(0);
+    for (findings) |f| counts[@intFromEnum(tier.classify(f.severity, file))] += 1;
+
+    var w: std.Io.Writer.Allocating = .init(arena);
+    try w.writer.print("zcanon: {s} —", .{base});
+    var sep: []const u8 = " ";
+    for (counts, 0..) |n, t| {
+        if (n == 0) continue;
+        try w.writer.print("{s}{d} {s}", .{ sep, n, @as(tier.Tier, @enumFromInt(t)).key() });
+        sep = ", ";
+    }
+
+    for ([_]tier.Tier{ .blocking, .caution }) |t| {
+        for (findings) |f| {
+            if (tier.classify(f.severity, file) != t) continue;
+            const msg = truncateUtf8(f.message, SHORT_MSG);
+            try w.writer.print("\n{s} [{s}] {d}:{d}  {s}{s}", .{
+                t.mark(), f.rule, f.line, f.col, msg, if (msg.len < f.message.len) "…" else "",
+            });
+        }
+    }
+
+    for ([_]tier.Tier{ .advisory, .expected }) |t| {
+        if (counts[@intFromEnum(t)] == 0) continue;
+        try w.writer.print("\n{s} {s}:", .{ t.mark(), if (t == .advisory) "advisory" else "expected (test/bench code)" });
+        var entry_sep: []const u8 = " ";
+        // One entry per rule, in order of first appearance.
+        for (findings, 0..) |f, i| {
+            if (tier.classify(f.severity, file) != t) continue;
+            const first = for (findings[0..i]) |g| {
+                if (tier.classify(g.severity, file) == t and std.mem.eql(u8, g.rule, f.rule)) break false;
+            } else true;
+            if (!first) continue;
+            var n: usize = 0;
+            for (findings[i..]) |g| {
+                if (tier.classify(g.severity, file) == t and std.mem.eql(u8, g.rule, f.rule)) n += 1;
+            }
+            try w.writer.print("{s}[{s}]", .{ entry_sep, f.rule });
+            entry_sep = " · ";
+            if (n > 1) try w.writer.print("×{d}", .{n});
+            var listed: usize = 0;
+            for (findings[i..]) |g| {
+                if (tier.classify(g.severity, file) != t or !std.mem.eql(u8, g.rule, f.rule)) continue;
+                if (listed == SHORT_LINES) {
+                    try w.writer.writeAll(" …");
+                    break;
+                }
+                try w.writer.print("{s}{d}", .{ if (listed == 0) " " else ",", g.line });
+                listed += 1;
+            }
+        }
+    }
+    if (counts[@intFromEnum(tier.Tier.advisory)] + counts[@intFromEnum(tier.Tier.expected)] > 0)
+        try w.writer.print("\nfull messages: zcanon check --full {s}", .{file});
+    return w.written();
+}
+
+/// True when a map-backed rule (R011–R013) fired — the case where the zephem lookup hint is
+/// actionable. The full view always carries the hint.
+pub fn wantsHint(view: View, findings: []const Finding) bool {
+    if (view == .full) return true;
+    for (findings) |f| {
+        if (std.mem.eql(u8, book.groupOf(f.rule), book.GROUP_MAP)) return true;
+    }
+    return false;
+}
+
 /// Group by tier and render the block Claude sees. Returns null when there is nothing to say.
 pub fn renderContext(
     arena: std.mem.Allocator,
     base: []const u8,
     file: []const u8,
     findings: []const Finding,
+    view: View,
 ) !?[]const u8 {
     if (findings.len == 0) return null;
+    if (view == .short) return try renderShort(arena, base, file, findings);
 
     // Layout is byte-identical to the Nushell original: header, blank line, then tier blocks
     // separated by a blank line. Rows are JOINED by "\n" rather than each carrying a trailing
@@ -301,22 +334,23 @@ pub fn truncateUtf8(s: []const u8, max: usize) []const u8 {
     return s[0..end];
 }
 
-/// Assemble the final context: findings, then any notices, then the hint — bounded by
-/// MAX_CONTEXT as a whole.
+/// Assemble the final context: findings, then any notices, then the hint (when `hint`) —
+/// bounded by MAX_CONTEXT as a whole.
 ///
 /// The budget is taken from the *findings* only. Notices explain why a check did not run and
 /// the hint says how to look an API up; both are short and both are useless to drop, so they
 /// are reserved rather than truncated away. Returns null when there is nothing to say.
-pub fn compose(arena: std.mem.Allocator, body: []const u8, notices: []const []const u8) !?[]const u8 {
-    var extra: usize = HINT.len;
+pub fn compose(arena: std.mem.Allocator, body: []const u8, notices: []const []const u8, hint: bool) !?[]const u8 {
+    const hint_text = if (hint) HINT else "";
+    var extra: usize = hint_text.len;
     for (notices) |n| extra += n.len;
-    if (body.len == 0 and extra == HINT.len) return null;
+    if (body.len == 0 and extra == hint_text.len) return null;
 
     const budget = if (extra >= MAX_CONTEXT) 0 else MAX_CONTEXT - extra;
     var w: std.Io.Writer.Allocating = .init(arena);
     try w.writer.writeAll(truncateUtf8(body, budget));
     for (notices) |n| try w.writer.writeAll(n);
-    try w.writer.writeAll(HINT);
+    try w.writer.writeAll(hint_text);
     return w.written();
 }
 

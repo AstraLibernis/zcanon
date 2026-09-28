@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const zephem = @import("zcanon").zephem;
 const snag = @import("zcanon").snag;
 
 fn scan(gpa: std.mem.Allocator, src: [:0]const u8, out: *std.ArrayList(snag.Finding)) !void {
@@ -244,6 +245,19 @@ test "a rule the map contradicts emits nothing" {
     var off: std.ArrayList(snag.Finding) = .empty;
     try snag.scanWithOpts(gpa, "t.zig", src, &off, .{ .stale = &.{.r003_mem_copy} });
     for (off.items) |f| try testing.expect(!std.mem.eql(u8, f.rule().code, "R003"));
+}
+
+test "mapKeys asks for every chain, its prefixes, std, and the premise paths" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+    var keys: zephem.Keys = .empty;
+    try snag.mapKeys(gpa, "const x = std.fmt.parseInt(u8, s, 10); const y = foo.std.bar;", &keys);
+    for ([_][]const u8{ "std.fmt.parseInt", "std.fmt", "std", "std.mem.copy", "std.mem.set" }) |k|
+        try testing.expect(keys.contains(k));
+    // `foo.std.bar` is not rooted at std.
+    try testing.expect(!keys.contains("std.bar"));
+    try testing.expectEqual(@as(usize, 5), keys.count());
 }
 
 test "structural rules report whether they ran" {

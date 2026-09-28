@@ -98,7 +98,7 @@ fn synthetic(gpa: std.mem.Allocator) ![]u8 {
 }
 
 test "parsing indexes by path and skips the header and malformed rows" {
-    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator));
+    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator), null);
     defer m.deinit();
 
     try testing.expectEqual(@as(usize, 3), m.count());
@@ -107,7 +107,7 @@ test "parsing indexes by path and skips the header and malformed rows" {
 }
 
 test "entry fields land in the right columns" {
-    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator));
+    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator), null);
     defer m.deinit();
 
     const e = m.get("std.fmt.parseInt").?;
@@ -118,21 +118,35 @@ test "entry fields land in the right columns" {
 }
 
 test "a private decl is flagged as not callable at that path" {
-    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator));
+    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator), null);
     defer m.deinit();
     try testing.expect(!m.get("std.hidden.thing").?.isPublic());
 }
 
 test "a deprecated entry carries its replacement through to the reader" {
-    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator));
+    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator), null);
     defer m.deinit();
     const e = m.get("std.mem.indexOf").?;
     try testing.expect(zephem.isDeprecated(e.doc));
     try testing.expectEqualStrings("find", zephem.deprecationOf(e.doc).?);
 }
 
+test "a wanted set indexes only the rows asked for" {
+    var keys: zephem.Keys = .empty;
+    defer zephem.freeKeys(testing.allocator, &keys);
+    try zephem.addKey(testing.allocator, &keys, "std.fmt.parseInt");
+    try zephem.addKey(testing.allocator, &keys, "std.fmt.parseInt"); // a repeat is not a leak
+    try zephem.addKey(testing.allocator, &keys, "std.not.there");
+
+    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator), &keys);
+    defer m.deinit();
+    try testing.expectEqual(@as(usize, 1), m.count());
+    try testing.expectEqualStrings("fn", m.get("std.fmt.parseInt").?.kind);
+    try testing.expect(m.get("std.mem.indexOf") == null);
+}
+
 test "an absent path resolves to null — the basis for R013" {
-    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator));
+    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator), null);
     defer m.deinit();
     try testing.expect(m.get("std.mem.copy") == null);
     try testing.expect(m.get("std.mem.copyForwards2") == null);

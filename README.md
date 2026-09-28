@@ -65,7 +65,7 @@ printing the exact command that fixes it:
 1. **zephem** — finds your zephem checkout (beside zcanon, or `$ZEPHEM_HOME`) and records where
    it is, so nothing needs an environment variable afterwards; builds zephem if needed; checks
    its std map is pinned to the Zig on your PATH; bakes and loads the lookup table.
-2. **Claude Code** — checks zsnag was built, and that Claude Code's `settings.json` (in
+2. **Claude Code** — checks zsnag (the standalone linter) was built, and that Claude Code's `settings.json` (in
    `~/.claude`, or `$CLAUDE_CONFIG_DIR`) is valid JSON in a writable directory. zcanon never
    rewrites a settings file it cannot parse.
 3. **The hook** — installs it (backing up `settings.json` first, touching nothing but its own
@@ -85,11 +85,14 @@ PostToolUse protocol and `zcanon setup` installs into Claude Code's settings. Th
 themselves can still be run by hand on any file:
 
 ```sh
-zig-out/bin/zcanon check path/to/file.zig    # exit 0 clean, 1 something blocking, 3 unreadable
+zig-out/bin/zcanon check path/to/file.zig         # exit 0 clean, 1 something blocking, 3 unreadable
+zig-out/bin/zcanon check --full path/to/file.zig  # every message, grouped under full tier headings
 ```
 
-It prints the findings in the same grouped form the hook feeds Claude, and records them to the
-same book. Wiring it into another tool automatically is up to you for now.
+It prints the findings in the same form the hook feeds Claude, and records them to the same
+book. Both default to the **short view**: a tally line, one row per blocking or caution
+finding, and advisory findings collapsed to rule + line numbers. `zcanon view full` switches
+the hook to the full layout; `zcanon view short` switches back. Wiring it into another tool automatically is up to you for now.
 
 ### Day to day
 

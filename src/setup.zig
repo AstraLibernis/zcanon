@@ -71,7 +71,7 @@ const PROBE_SRC =
 
 pub fn run(c: vars.Ctx, mode: Mode, args: []const []const u8) !void {
     var buf: [1 << 14]u8 = undefined;
-    var fw = std.Io.File.stdout().writer(c.io, &buf);
+    var fw = std.Io.File.stdout().writerStreaming(c.io, &buf);
     const w = &fw.interface;
 
     if (args.len > 0) {
@@ -183,7 +183,7 @@ fn phaseZephem(c: vars.Ctx, r: *Report, mode: Mode) !bool {
         if (!try runIn(c, r, home.path, &.{ exe, "lookup" })) return false;
         try r.line(.fixed, "baked the lookup table ({s})", .{lp});
     }
-    var map = zephem.load(c) catch |e| {
+    var map = zephem.load(c, null) catch |e| {
         try r.line(.fail, "lookup table at {s} could not be read: {s}", .{ lp, @errorName(e) });
         return false;
     };
@@ -368,7 +368,7 @@ fn liveTest(c: vars.Ctx, r: *Report, sp: []const u8, mode: Mode) !void {
     if (!map) try r.todo("{s}", .{if (core)
         "the hook cannot load the lookup table; check phase 1 above"
     else
-        "the map rules run inside zsnag, and zsnag itself did not run; fix that first"});
+        "the map rules run with the core rules, and those did not run either; fix that first"});
     try r.line(if (ast) .ok else .fail, "live test: zig ast-check {s}", .{if (ast) "ran" else "did NOT run"});
     if (!ast) try r.todo("`zig` must be on PATH in the environment Claude Code starts hooks in", .{});
 }
@@ -549,7 +549,7 @@ fn lastLines(s: []const u8, n: usize) []const u8 {
 /// a copy of the user's own settings.
 pub fn uninstall(c: vars.Ctx, args: []const []const u8) !void {
     var buf: [1 << 13]u8 = undefined;
-    var fw = std.Io.File.stdout().writer(c.io, &buf);
+    var fw = std.Io.File.stdout().writerStreaming(c.io, &buf);
     const w = &fw.interface;
 
     var purge = false;

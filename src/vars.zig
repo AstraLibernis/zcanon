@@ -92,6 +92,13 @@ pub fn disableFlagPath(c: Ctx) Error![]u8 {
     return std.fs.path.join(c.gpa, &.{ dir, "hook.disabled" });
 }
 
+/// Presence of this file makes the hook report in the full view instead of the short one.
+pub fn fullViewFlagPath(c: Ctx) Error![]u8 {
+    const dir = try configDir(c);
+    defer c.gpa.free(dir);
+    return std.fs.path.join(c.gpa, &.{ dir, "view.full" });
+}
+
 /// Absolute path to this binary, so the installed hook command points at the running build
 /// rather than a guessed checkout. `std.fs.selfExePath` was removed in 0.16; the lookup now
 /// lives on the Io layer.

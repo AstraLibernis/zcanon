@@ -31,7 +31,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     var out_buf: [1 << 16]u8 = undefined;
-    var ow = std.Io.File.stdout().writer(io, &out_buf);
+    var ow = std.Io.File.stdout().writerStreaming(io, &out_buf);
     const out = &ow.interface;
 
     var json = false;
@@ -69,13 +69,29 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    // Read every file first: the map is loaded with only the paths these files reference.
+    const Src = struct { path: []const u8, src: ?[:0]const u8 };
+    var srcs: std.ArrayList(Src) = .empty;
+    for (argv.items) |path| {
+        nfiles += 1;
+        const src = std.Io.Dir.cwd().readFileAllocOptions(io, path, gpa, .unlimited, .of(u8), 0) catch |e| blk: {
+            // A file we cannot read is a real failure, not a silent skip.
+            try stderr(io, "zsnag: cannot read {s}: {s}\n", .{ path, @errorName(e) });
+            bad_read = true;
+            break :blk null;
+        };
+        try srcs.append(gpa, .{ .path = path, .src = src });
+    }
+
     // The zephem map backs R011/R012/R013. Its absence is REPORTED, never silently skipped:
     // "no findings" must not be indistinguishable from "those rules never ran".
     const c: vars.Ctx = .{ .gpa = gpa, .io = io, .env = init.environ_map };
     var map: ?zephem.Map = null;
     defer if (map) |*m| m.deinit();
-    if (!no_map) {
-        if (zephem.load(c)) |m| {
+    if (!no_map and nfiles > 0) {
+        var keys: zephem.Keys = .empty;
+        for (srcs.items) |f| if (f.src) |src| try snag.mapKeys(gpa, src, &keys);
+        if (zephem.load(c, &keys)) |m| {
             map = m;
             if (try zephem.staleness(c, zigVersion(c))) |warn|
                 try stderr(io, "zsnag: {s}\n", .{warn});
@@ -92,22 +108,16 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    for (argv.items) |path| {
-        nfiles += 1;
-        const src = std.Io.Dir.cwd().readFileAllocOptions(io, path, gpa, .unlimited, .of(u8), 0) catch |e| {
-            // A file we cannot read is a real failure, not a silent skip.
-            try stderr(io, "zsnag: cannot read {s}: {s}\n", .{ path, @errorName(e) });
-            bad_read = true;
-            continue;
-        };
+    for (srcs.items) |f| {
+        const src = f.src orelse continue;
         var parsed = false;
-        try snag.scanWithOpts(gpa, path, src, &findings, .{
+        try snag.scanWithOpts(gpa, f.path, src, &findings, .{
             .map = if (map) |*m| m else null,
             .check_existence = check_existence,
             .ran_structural = &parsed,
             .stale = stale,
         });
-        // One unparseable file is enough to make the structural rules' silence meaningless
+        // One unparseable file is enough to make the structural rules' silence meaningful
         // for this invocation.
         if (!parsed) all_parsed = false;
     }
@@ -143,7 +153,7 @@ fn zigVersion(c: vars.Ctx) []const u8 {
 
 fn stderr(io: std.Io, comptime fmt: []const u8, args: anytype) !void {
     var buf: [1024]u8 = undefined;
-    var w = std.Io.File.stderr().writer(io, &buf);
+    var w = std.Io.File.stderr().writerStreaming(io, &buf);
     try w.interface.print(fmt, args);
     try w.interface.flush();
 }

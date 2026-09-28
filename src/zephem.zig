@@ -154,9 +154,32 @@ pub const Map = struct {
     }
 };
 
-/// Load and index the lookup table. Fails loudly with zephem's own remedy if it is absent —
-/// there is deliberately no fallback to model memory, per zephem's stated design.
-pub fn load(c: vars.Ctx) LoadError!Map {
+/// The map paths one scan will ask about. Loading indexes only these rows: building a hash
+/// map of all ~63k rows cost ~28 ms of the hook's ~33 ms per edit, to answer a few dozen
+/// lookups. Keys are owned by the set; free with `freeKeys`.
+pub const Keys = std.StringHashMapUnmanaged(void);
+
+pub fn addKey(gpa: std.mem.Allocator, keys: *Keys, path: []const u8) !void {
+    const gop = try keys.getOrPut(gpa, path);
+    if (gop.found_existing) return;
+    gop.key_ptr.* = gpa.dupe(u8, path) catch |e| {
+        keys.removeByPtr(gop.key_ptr);
+        return e;
+    };
+}
+
+pub fn freeKeys(gpa: std.mem.Allocator, keys: *Keys) void {
+    var it = keys.keyIterator();
+    while (it.next()) |k| gpa.free(k.*);
+    keys.deinit(gpa);
+}
+
+/// Load the lookup table, indexing only the rows in `wanted` (every row when null). `get`
+/// on a path outside `wanted` reports a miss, so the caller must ask for every path it will
+/// query — including the prefixes `longestPrefixKind` walks. Fails loudly with zephem's own
+/// remedy if the table is absent — there is deliberately no fallback to model memory, per
+/// zephem's stated design.
+pub fn load(c: vars.Ctx, wanted: ?*const Keys) LoadError!Map {
     const path = try lookupPath(c);
     defer c.gpa.free(path);
 
@@ -165,13 +188,13 @@ pub fn load(c: vars.Ctx) LoadError!Map {
         else => return e,
     };
     errdefer c.gpa.free(text);
-    return parse(c.gpa, text);
+    return parse(c.gpa, text, wanted);
 }
 
 /// Index an already-read lookup table. Split out from `load` so the parsing can be tested
 /// against a synthetic table without depending on the ambient environment.
 /// Takes ownership of `text`; entries slice into it.
-pub fn parse(gpa: std.mem.Allocator, text: []u8) !Map {
+pub fn parse(gpa: std.mem.Allocator, text: []u8, wanted: ?*const Keys) !Map {
     var index: std.StringHashMapUnmanaged(Entry) = .empty;
     errdefer index.deinit(gpa);
 
@@ -182,6 +205,11 @@ pub fn parse(gpa: std.mem.Allocator, text: []u8) !Map {
         if (first) {
             first = false;
             if (std.mem.startsWith(u8, line, "path\t")) continue;
+        }
+        // Filter on the path column before splitting the rest of the row.
+        if (wanted) |w| {
+            const tab = std.mem.findScalar(u8, line, '\t') orelse continue;
+            if (!w.contains(line[0..tab])) continue;
         }
         var f: [Col.count][]const u8 = @splat("");
         var it = std.mem.splitScalar(u8, line, '\t');

@@ -24,6 +24,16 @@ pub const Tier = enum(u2) {
         };
     }
 
+    /// The head's leading symbol, for the short view's one-line rows.
+    pub fn mark(t: Tier) []const u8 {
+        return switch (t) {
+            .blocking => "▲",
+            .caution => "⚠",
+            .advisory => "ℹ",
+            .expected => "·",
+        };
+    }
+
     pub fn key(t: Tier) []const u8 {
         return @tagName(t);
     }

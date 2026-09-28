@@ -85,11 +85,26 @@ test "cli: the hook reports findings and records them" {
     const r = try s.hook(f);
     try testing.expectEqual(@as(u8, 0), r.code); // PostToolUse must never exit non-zero
     const ctx = (try h.additionalContext(s.gpa(), r.stdout)).?;
-    try testing.expect(std.mem.find(u8, ctx, "R004") != null);
-    try testing.expect(std.mem.find(u8, ctx, "CORRECTNESS RISK") != null);
+    try testing.expect(std.mem.find(u8, ctx, "⚠ [R004] 3:") != null);
+    try testing.expect(std.mem.find(u8, ctx, "CORRECTNESS RISK") == null); // short view
 
     const bookfile = try s.read("config/book.tsv");
     try testing.expect(std.mem.find(u8, bookfile, "R004") != null);
+}
+
+test "cli: view full switches the hook to the full layout, and back" {
+    var s = try box("hook-view");
+    defer s.deinit();
+    const f = try s.write("t.zig", dirty_zig);
+
+    try testing.expectEqual(@as(u8, 0), (try s.zcanon(&.{ "view", "full" })).code);
+    const full = (try h.additionalContext(s.gpa(), (try s.hook(f)).stdout)).?;
+    try testing.expect(std.mem.find(u8, full, "CORRECTNESS RISK") != null);
+
+    try testing.expectEqual(@as(u8, 0), (try s.zcanon(&.{ "view", "short" })).code);
+    const short = (try h.additionalContext(s.gpa(), (try s.hook(f)).stdout)).?;
+    try testing.expect(std.mem.find(u8, short, "CORRECTNESS RISK") == null);
+    try testing.expectEqual(@as(u8, 2), (try s.zcanon(&.{ "view", "wide" })).code);
 }
 
 test "cli: a clean file produces no output at all" {
