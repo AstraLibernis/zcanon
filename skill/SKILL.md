@@ -27,6 +27,8 @@ zcanon keeps you from the mistakes an LLM makes in Zig, in two halves:
     `std.array_list.Aligned().append`, and hits list their other public names on a `≡` line.
   - `[priv]` hits are private decls, real but not callable at that path from outside their file.
   - Builtins are in the map too: `{{ZEPHEM}} map doc @intCast` (signature, doc, langref example).
+  - Third-party packages: if the project has dependencies, run `{{ZEPHEM}} deps <project>` once
+    (after `zig build --fetch`); then `look`/`map` answer for them too (`map doc clap.parse`).
   - A multi-word `look` that no single decl matches prints the best hits per term on stderr —
     compose the answer from those (`print stdout` → `std.Io.File.stdout` + `Writer.print`).
 - **While and after** you write, the hook catches the known traps (below).
