@@ -17,6 +17,7 @@ const snag = @import("snag.zig");
 const zephem = @import("zephem.zig");
 const daemon = @import("daemon.zig");
 const semantic = @import("semantic.zig");
+const bugs = @import("bugs.zig");
 
 const usage =
     \\zcanon <command> [args]
@@ -37,8 +38,10 @@ const usage =
     \\                     compiler can report semantic errors on every edit
     \\  daemon status|stop [dir]
     \\                     the project's background process (started by the hook; exits when idle)
-    \\  book [report]      read the book: (default) | recent [N] | files | R0NN
-    \\  prune              drop findings for files that no longer exist
+    \\  book [report]      the book: every mistake, how often, when, and where it last was:
+    \\                     (default: most frequent) | rules | recent [N] | open | R0NN
+    \\  bugs               the bug report: mistakes made 5+ times (never pruned)
+    \\  prune              forget open findings in files that no longer exist
     \\
 ;
 
@@ -70,6 +73,7 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "daemon")) return runDaemon(c, rest);
     if (std.mem.eql(u8, cmd, "book")) return runBook(c, rest);
     if (std.mem.eql(u8, cmd, "prune")) return runPrune(c);
+    if (std.mem.eql(u8, cmd, "bugs")) return runBugs(c);
 
     return fail(c, usage);
 }
@@ -143,9 +147,9 @@ fn runHook(c: vars.Ctx) !void {
             try body.writer.writeAll(b);
         }
         if (hook.wantsHint(view, a.findings)) hint = true;
-        try addNotices(c.gpa, &notices, &.{a.book_notice});
     }
     try run.semanticBlocks(view, &body, &notices);
+    try addNotices(c.gpa, &notices, &.{run.finish()});
     const ctx = (try hook.compose(c.gpa, body.written(), notices.items, hint)) orelse return;
 
     var out_buf: [1 << 16]u8 = undefined;
@@ -242,7 +246,6 @@ fn readAll(c: vars.Ctx, paths: []const []const u8) ![]File {
 
 const Analysis = struct {
     findings: []hook.Finding,
-    book_notice: []const u8,
 };
 
 /// One file's syntax check on another thread. `smp_allocator` because the run's arena is not
@@ -301,6 +304,12 @@ const Run = struct {
     notices: std.ArrayList([]const u8),
     /// Each project's latest background-compiler result, from its daemon.
     sem: std.ArrayList(Sem) = .empty,
+    /// The open set and the history, loaded on first `record` and written by `finish`.
+    ledger: ?book.Book = null,
+    history: ?book.History = null,
+    ledger_failed: ?anyerror = null,
+    /// This run's timestamp, "" if the clock is unusable.
+    now: []const u8 = "",
     /// Syntax findings by file, so a compiler error that repeats one is not shown twice.
     ast_seen: std.ArrayList(struct { path: []const u8, f: hook.Finding }) = .empty,
 
@@ -314,6 +323,8 @@ const Run = struct {
             null;
 
         var r: Run = .{ .c = c, .ast = ast, .map = null, .stale = &.{}, .zver = "unknown", .notices = .empty };
+        const stamp_buf = try c.gpa.create([20]u8);
+        r.now = book.stamp(stamp_buf, book.nowSeconds(c.io)) catch "";
         var keys: zephem.Keys = .empty;
         for (files) |f| if (f.src) |src| try snag.mapKeys(c.gpa, src, &keys);
 
@@ -338,6 +349,7 @@ const Run = struct {
                 }
             }
             for (roots.items, newest.items) |root, edit| {
+                if (daemon.unusable(c, root) != null) continue; // `zcanon daemon status` says why
                 const reply = daemon.request(c, root, .query, if (from_daemon == null) &keys else null) orelse {
                     daemon.start(c, root);
                     continue;
@@ -397,8 +409,20 @@ const Run = struct {
             switch (rep.sem) {
                 .starting => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⋯ the background compiler for {s} is on its first build; its errors follow on a later edit.", .{s.root})}),
                 .down => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⚠ semantic checks are down for {s}: {s}", .{ s.root, rep.detail })}),
-                .ok, .no_check => {},
-                .errors => {
+                .no_check => {},
+                .ok, .errors => {
+                    // A build that finished after the newest edit speaks for the project now:
+                    // record its errors, and close the ones it no longer reports.
+                    if (rep.finished_ns >= s.newest_edit) {
+                        var fresh: std.ArrayList(book.Record) = .empty;
+                        for (rep.diags) |d| {
+                            if (!std.mem.eql(u8, d.severity, "error")) continue;
+                            const abs = try std.fs.path.resolve(c.gpa, &.{ s.root, d.path });
+                            try fresh.append(c.gpa, r.recordOf(abs, book.COMPILE_RULE, "error", d.line, d.col, d.message, ""));
+                        }
+                        r.record(.{ .under = s.root }, fresh.items, &.{book.GROUP_COMPILE});
+                    }
+                    if (rep.sem == .ok) continue;
                     // Drop what the syntax check already reported for a file checked this run.
                     var diags: std.ArrayList(semantic.Diag) = .empty;
                     for (rep.diags) |d| {
@@ -457,18 +481,71 @@ const Run = struct {
         const deduped = try hook.dedup(c.gpa, src, findings.items);
         hook.sortFindings(deduped);
 
-        // The book is best-effort. A write failure (or error.NegativeTimestamp from a bad clock)
-        // must not propagate: a non-zero exit surfaces as a hook ERROR with no findings, which is
-        // the opposite of the always-report invariant above. Say so in-band instead.
-        var book_notice: []const u8 = "";
-        recordToBook(c, path, src, deduped, active.items, r.zver) catch |e| {
-            book_notice = std.fmt.allocPrint(
-                c.gpa,
-                "\n\n⚠ the book was not updated ({s}) — findings above are still valid.",
-                .{@errorName(e)},
-            ) catch "";
+        var fresh: std.ArrayList(book.Record) = .empty;
+        for (deduped) |f| try fresh.append(c.gpa, r.recordOf(path, f.rule, f.severity, f.line, f.col, f.message, hook.snippetFor(src, f.line)));
+        r.record(.{ .file = path }, fresh.items, active.items);
+        return .{ .findings = deduped };
+    }
+
+    fn recordOf(r: *Run, file: []const u8, rule: []const u8, severity: []const u8, line: u32, col: u32, message: []const u8, snippet: []const u8) book.Record {
+        return .{
+            .first_ts = r.now,
+            .last_ts = r.now,
+            .hits = 1,
+            .zig_version = r.zver,
+            .file = file,
+            .rule = rule,
+            .severity = severity,
+            .line = line,
+            .col = col,
+            .message = message,
+            .snippet = snippet,
         };
-        return .{ .findings = deduped, .book_notice = book_notice };
+    }
+
+    /// Record one scan to the book, loaded on first use and written once by `finish`. The
+    /// book is best-effort: a failure here must not propagate, because a non-zero exit
+    /// surfaces as a hook ERROR with no findings. `finish` says so in-band instead.
+    fn record(r: *Run, scope: book.Book.Scope, fresh: []const book.Record, active: []const []const u8) void {
+        if (r.ledger_failed != null) return;
+        r.recordInner(scope, fresh, active) catch |e| {
+            r.ledger_failed = e;
+        };
+    }
+
+    fn recordInner(r: *Run, scope: book.Book.Scope, fresh: []const book.Record, active: []const []const u8) !void {
+        if (r.now.len == 0) return error.NegativeTimestamp;
+        if (r.ledger == null) try r.load();
+        // A finding not already open is a new occurrence: +1 to its mistake in the history.
+        var new: std.ArrayList(book.Record) = .empty;
+        r.ledger.?.prune(scope, fresh, active);
+        try r.ledger.?.upsertTracking(fresh, &new);
+        for (new.items) |n| try r.history.?.bump(n, r.now);
+    }
+
+    /// Write the open set, the history, and the bug report.
+    fn save(r: *Run, open: *const book.Book, history: *const book.History) !void {
+        try writeBook(r.c, open, try openPath(r.c));
+        try writeHistory(r.c, history);
+        try updateBugs(r.c, history.entries.items, r.now);
+    }
+
+    /// Load the open set and the history (see `loadLedger`).
+    fn load(r: *Run) !void {
+        r.ledger = .init(r.c.gpa);
+        r.history = .init(r.c.gpa);
+        try loadLedger(r.c, &r.ledger.?, &r.history.?);
+    }
+
+    /// Write the book, then fold it into the bug report. Returns a notice when either failed.
+    fn finish(r: *Run) []const u8 {
+        if (r.ledger_failed == null) if (r.ledger) |*b| {
+            r.save(b, &r.history.?) catch |e| {
+                r.ledger_failed = e;
+            };
+        };
+        const e = r.ledger_failed orelse return "";
+        return std.fmt.allocPrint(r.c.gpa, "\n\n⚠ the book was not updated ({s}) — findings above are still valid.", .{@errorName(e)}) catch "";
     }
 };
 
@@ -505,14 +582,15 @@ fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
         if (hook.wantsHint(view, a.findings)) hint = true;
         const base = std.fs.path.basename(f.path);
         if (try hook.renderContext(c.gpa, base, f.path, a.findings, view)) |body| {
-            try w.interface.print("{s}{s}\n", .{ body, a.book_notice });
+            try w.interface.print("{s}\n", .{body});
         } else {
-            try w.interface.print("{s}: no findings{s}\n", .{ base, a.book_notice });
+            try w.interface.print("{s}: no findings\n", .{base});
         }
     }
     var sem_body: std.Io.Writer.Allocating = .init(c.gpa);
     var sem_notices: std.ArrayList([]const u8) = .empty;
     try run.semanticBlocks(view, &sem_body, &sem_notices);
+    try addNotices(c.gpa, &sem_notices, &.{run.finish()});
     if (sem_body.written().len > 0) try w.interface.print("{s}\n", .{sem_body.written()});
     for (sem_notices.items) |n| try w.interface.print("{s}\n", .{std.mem.trimStart(u8, n, "\n")});
     if (hint) try w.interface.print("{s}\n", .{std.mem.trimStart(u8, hook.HINT, "\n")});
@@ -521,43 +599,37 @@ fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
     if (blocking) std.process.exit(1);
 }
 
-fn recordToBook(
-    c: vars.Ctx,
-    path: []const u8,
-    src: []const u8,
-    findings: []const hook.Finding,
-    active: []const []const u8,
-    zver: []const u8,
-) !void {
-    var b: book.Book = .init(c.gpa);
+/// The open set lives beside the book.
+fn openPath(c: vars.Ctx) ![]const u8 {
     const book_path = try vars.bookPath(c);
-    if (std.Io.Dir.cwd().readFileAlloc(c.io, book_path, c.gpa, .unlimited)) |text| {
-        try b.parse(text);
+    return std.fs.path.join(c.gpa, &.{ std.fs.path.dirname(book_path) orelse ".", "open.tsv" });
+}
+
+fn writeHistory(c: vars.Ctx, h: *const book.History) !void {
+    const path = try vars.bookPath(c);
+    try std.Io.Dir.cwd().createDirPath(c.io, std.fs.path.dirname(path) orelse ".");
+    var w: std.Io.Writer.Allocating = .init(c.gpa);
+    try h.write(&w.writer);
+    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = w.written() });
+}
+
+/// Fold the history into the bug report beside it; rewrite both files only when it changed.
+fn updateBugs(c: vars.Ctx, entries: []const book.Entry, now: []const u8) !void {
+    const book_path = try vars.bookPath(c);
+    const dir = std.fs.path.dirname(book_path) orelse ".";
+    const tsv = try std.fs.path.join(c.gpa, &.{ dir, "bugs.tsv" });
+    var list: std.ArrayList(bugs.Bug) = .empty;
+    if (std.Io.Dir.cwd().readFileAlloc(c.io, tsv, c.gpa, .unlimited)) |text| {
+        try bugs.parse(c.gpa, text, &list);
     } else |_| {}
+    if (!try bugs.update(c.gpa, entries, &list, now)) return;
 
-    var stamp_buf: [20]u8 = undefined;
-    const now = try book.stamp(&stamp_buf, book.nowSeconds(c.io));
-
-    var fresh: std.ArrayList(book.Record) = .empty;
-    for (findings) |f| {
-        try fresh.append(c.gpa, .{
-            .first_ts = now,
-            .last_ts = now,
-            .hits = 1,
-            .zig_version = zver,
-            .file = path,
-            .rule = f.rule,
-            .severity = f.severity,
-            .line = f.line,
-            .col = f.col,
-            .message = f.message,
-            .snippet = hook.snippetFor(src, f.line),
-        });
-    }
-
-    b.pruneFile(path, fresh.items, active);
-    try b.upsert(fresh.items);
-    try writeBook(c, &b, book_path);
+    var w: std.Io.Writer.Allocating = .init(c.gpa);
+    try bugs.write(&w.writer, list.items);
+    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = tsv, .data = w.written() });
+    var md: std.Io.Writer.Allocating = .init(c.gpa);
+    try bugs.render(&md.writer, list.items);
+    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try std.fs.path.join(c.gpa, &.{ dir, "bugs.md" }), .data = md.written() });
 }
 
 fn writeBook(c: vars.Ctx, b: *const book.Book, path: []const u8) !void {
@@ -687,6 +759,10 @@ fn runDaemon(c: vars.Ctx, args: []const []const u8) !void {
         return fail(c, try std.fmt.allocPrint(c.gpa, "no build.zig at or above {s}\n", .{dir}));
     var buf: [4096]u8 = undefined;
     var w = stdout(c, &buf);
+    if (daemon.unusable(c, root)) |why| {
+        try w.interface.print("{s}: no daemon can run: {s}\n", .{ root, why });
+        return w.interface.flush();
+    }
     const reply = daemon.request(c, root, if (is_stop) .stop else .status, null) orelse {
         try w.interface.print("{s}: no daemon running\n", .{root});
         return w.interface.flush();
@@ -734,38 +810,69 @@ fn runView(c: vars.Ctx, args: []const []const u8) !void {
 
 // ---- the book -------------------------------------------------------------
 
-fn loadBook(c: vars.Ctx, b: *book.Book) !void {
-    const path = try vars.bookPath(c);
-    const text = std.Io.Dir.cwd().readFileAlloc(c.io, path, c.gpa, .unlimited) catch return;
-    try b.parse(text);
+/// Load the open set and the history. A book in the old per-finding format (before the
+/// history existed) is migrated: it becomes the open set, and each of its rows counts as one
+/// occurrence in the history. Rows an interim build had marked fixed go to the history only.
+fn loadLedger(c: vars.Ctx, open: *book.Book, history: *book.History) !void {
+    const text = std.Io.Dir.cwd().readFileAlloc(c.io, try vars.bookPath(c), c.gpa, .unlimited) catch "";
+    if (book.isOpenFormat(text)) {
+        var old: book.Book = .init(c.gpa);
+        try old.parse(text);
+        for (old.recs.items) |rec| {
+            try history.bump(rec, rec.first_ts);
+            if (rec.fixed_ts.len == 0) try open.recs.append(c.gpa, rec);
+        }
+        return;
+    }
+    try history.parse(text);
+    if (std.Io.Dir.cwd().readFileAlloc(c.io, try openPath(c), c.gpa, .unlimited)) |open_text| {
+        try open.parse(open_text);
+    } else |_| {}
 }
 
 fn runBook(c: vars.Ctx, args: []const []const u8) !void {
-    var b: book.Book = .init(c.gpa);
-    try loadBook(c, &b);
-    const mode = report.Mode.parse(args) catch return fail(c, "unknown report; try: book | book recent [N] | book files | book R0NN\n");
+    var open: book.Book = .init(c.gpa);
+    var history: book.History = .init(c.gpa);
+    try loadLedger(c, &open, &history);
+    const mode = report.Mode.parse(args) catch return fail(c, "unknown report; try: book | book rules | book recent [N] | book open | book R0NN\n");
 
     var buf: [1 << 16]u8 = undefined;
     var w = stdout(c, &buf);
-    try report.render(c.gpa, &w.interface, b.recs.items, mode);
+    try report.render(c.gpa, &w.interface, history.entries.items, open.recs.items, mode);
     try w.interface.flush();
 }
 
 fn runPrune(c: vars.Ctx) !void {
-    var b: book.Book = .init(c.gpa);
-    try loadBook(c, &b);
-    const before = b.recs.items.len;
+    var open: book.Book = .init(c.gpa);
+    var history: book.History = .init(c.gpa);
+    try loadLedger(c, &open, &history);
+    const before = open.recs.items.len;
 
+    // Only the open set: a file that is gone has no findings in it any more. The history is
+    // never touched.
     var i: usize = 0;
-    while (i < b.recs.items.len) {
-        if (exists(c, b.recs.items[i].file)) i += 1 else _ = b.recs.orderedRemove(i);
+    while (i < open.recs.items.len) {
+        if (exists(c, open.recs.items[i].file)) i += 1 else _ = open.recs.orderedRemove(i);
     }
-    try writeBook(c, &b, try vars.bookPath(c));
+    try writeBook(c, &open, try openPath(c));
+    try writeHistory(c, &history);
 
     var buf: [256]u8 = undefined;
     var w = stdout(c, &buf);
-    try w.interface.print("pruned {d} findings for vanished files ({d} → {d}).\n", .{
-        before - b.recs.items.len, before, b.recs.items.len,
-    });
+    try w.interface.print("dropped {d} open findings in files that no longer exist; the history is unchanged.\n", .{before - open.recs.items.len});
+    try w.interface.flush();
+}
+
+fn runBugs(c: vars.Ctx) !void {
+    const book_path = try vars.bookPath(c);
+    const dir = std.fs.path.dirname(book_path) orelse ".";
+    var list: std.ArrayList(bugs.Bug) = .empty;
+    if (std.Io.Dir.cwd().readFileAlloc(c.io, try std.fs.path.join(c.gpa, &.{ dir, "bugs.tsv" }), c.gpa, .unlimited)) |text| {
+        try bugs.parse(c.gpa, text, &list);
+    } else |_| {}
+    var buf: [1 << 16]u8 = undefined;
+    var w = stdout(c, &buf);
+    try bugs.render(&w.interface, list.items);
+    try w.interface.print("\n(stored in {s}/bugs.tsv, readable copy in bugs.md)\n", .{dir});
     try w.interface.flush();
 }

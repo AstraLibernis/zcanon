@@ -39,12 +39,14 @@ no runtime dependencies: no `nu`, no `sqlite3`, no database server. The log is o
 | `zig-out/bin/zcanon` | The PostToolUse hook (`zsnag` + `zig ast-check` on every `.zig` edit, including ones a Bash command made, findings fed back to the model and logged to the book), plus install/uninstall and the book reader | Claude Code |
 | `skill/SKILL.md` | The instruction that makes the model actually *reach for* the check every session | Claude Code |
 
-The **book** is single-user local state in **one TSV** (`~/.config/zcanon/book.tsv`, override
-`$ZCANON_BOOK`) — auto-created on first write. It records what the model *actually* gets wrong
-on real edits, judged by the compiler — no synthetic generation. Findings are deduped on
-`(file, rule, message, snippet)`, deliberately excluding line/col so a finding survives edits
-that shift it; each save re-scans the whole file, so anything fixed is pruned and `hits` counts
-real recurrences rather than repeated saves.
+The **book** (`~/.config/zcanon/book.tsv`, override `$ZCANON_BOOK`) is the history of what
+the model *actually* gets wrong on real edits, judged by the compiler, with no synthetic
+generation. It holds one line per mistake: count, first and last date, and the latest
+`path:line` with its source line. Making a mistake again bumps its count; fixing it never
+removes the line. Beside it, `open.tsv` tracks the findings currently in the code, so the same
+unfixed finding is not counted again on every save. A mistake made 5 times is copied into the
+**bug report** (`bugs.tsv`, readable as `bugs.md`), which is only ever added to: those are the
+candidates for a new zsnag rule or a line in the skill.
 
 ## Install
 
@@ -118,10 +120,12 @@ back if not (a copy is also kept under `~/.config/zcanon/backups`).
 ### Day to day
 
 ```sh
-zig-out/bin/zcanon book              # the real mistakes the hook caught, ranked by frequency
-zig-out/bin/zcanon book recent 20    # newest findings
-zig-out/bin/zcanon book files        # per-file roll-up
-zig-out/bin/zcanon book R004         # detail for one rule
+zig-out/bin/zcanon book              # every mistake: how often, first/last date, last path:line
+zig-out/bin/zcanon book rules        # totals per rule
+zig-out/bin/zcanon book recent 20    # most recently made
+zig-out/bin/zcanon book open         # findings in the code right now
+zig-out/bin/zcanon book R004         # one rule, with the offending source lines
+zig-out/bin/zcanon bugs              # mistakes made 5+ times — the bug report, never pruned
 zig-out/bin/zsnag yourfile.zig       # the linter alone
 zig build test                       # unit tests + the end-to-end CLI tests
 ```

@@ -47,6 +47,15 @@ fn basePath(c: vars.Ctx, root: []const u8) ![]u8 {
     return std.fs.path.join(c.gpa, &.{ dir, "d", &name });
 }
 
+/// Why no daemon can serve `root`, or null if one can: a Unix socket path is limited to
+/// `UnixAddress.max_len` bytes, and a deep config directory can exceed it.
+pub fn unusable(c: vars.Ctx, root: []const u8) ?[]const u8 {
+    const base = basePath(c, root) catch return "cannot locate the config directory";
+    if (base.len + ".sock".len > std.Io.net.UnixAddress.max_len)
+        return "its socket path would exceed the Unix limit of 108 bytes; use a shorter config directory";
+    return null;
+}
+
 /// This binary's identity: path and modification time. A daemon started by an older build
 /// answers `stale` and exits, so a rebuilt zcanon never talks to old code.
 pub fn exeStamp(c: vars.Ctx) ![]const u8 {

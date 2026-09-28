@@ -7,96 +7,86 @@ const zcanon = @import("zcanon");
 const report = zcanon.report;
 const book = zcanon.book;
 
-fn rec(file: []const u8, rule: []const u8, sev: []const u8, hits: u64, ts: []const u8) book.Record {
+fn entry(rule: []const u8, count: u64, ts: []const u8, file: []const u8) book.Entry {
     return .{
+        .rule = rule,
+        .severity = "warn",
+        .pattern = "a message",
+        .count = count,
         .first_ts = ts,
         .last_ts = ts,
-        .hits = hits,
-        .zig_version = "0.16.0",
         .file = file,
-        .rule = rule,
-        .severity = sev,
-        .line = 1,
-        .col = 1,
+        .line = 7,
         .message = "a message",
         .snippet = "const x = 1;",
     };
 }
 
-fn render(recs: []const book.Record, mode: report.Mode) ![]u8 {
+fn render(history: []const book.Entry, mode: report.Mode) ![]u8 {
     var w: std.Io.Writer.Allocating = .init(testing.allocator);
     errdefer w.deinit();
-    try report.render(testing.allocator, &w.writer, recs, mode);
+    try report.render(testing.allocator, &w.writer, history, &.{}, mode);
     return w.toOwnedSlice();
 }
 
 test "mode parsing covers every report" {
-    try testing.expectEqual(report.Mode.toc, try report.Mode.parse(&.{}));
-    try testing.expectEqual(report.Mode.files, try report.Mode.parse(&.{"files"}));
+    try testing.expectEqual(report.Mode.mistakes, try report.Mode.parse(&.{}));
+    try testing.expectEqual(report.Mode.rules, try report.Mode.parse(&.{"rules"}));
+    try testing.expectEqual(report.Mode.open, try report.Mode.parse(&.{"open"}));
+    try testing.expectEqual(report.Mode.open, try report.Mode.parse(&.{"files"})); // old name
     try testing.expectEqual(@as(usize, 20), (try report.Mode.parse(&.{"recent"})).recent);
     try testing.expectEqual(@as(usize, 5), (try report.Mode.parse(&.{ "recent", "5" })).recent);
-    try testing.expectEqual(@as(usize, 20), (try report.Mode.parse(&.{ "recent", "abc" })).recent);
     try testing.expectEqualStrings("R004", (try report.Mode.parse(&.{"R004"})).rule);
+    try testing.expectEqualStrings("compile", (try report.Mode.parse(&.{"compile"})).rule);
     try testing.expectError(error.UnknownReport, report.Mode.parse(&.{"nonsense"}));
 }
 
-test "an empty book says so rather than printing an empty table" {
-    const out = try render(&.{}, .toc);
+test "an empty book says so" {
+    const out = try render(&.{}, .mistakes);
     defer testing.allocator.free(out);
     try testing.expect(std.mem.find(u8, out, "the book is empty") != null);
 }
 
-test "toc aggregates by rule and orders by hits" {
-    const recs = [_]book.Record{
-        rec("a.zig", "R004", "warn", 2, "2026-08-01 00:00:00"),
-        rec("b.zig", "R010", "info", 9, "2026-08-02 00:00:00"),
-        rec("c.zig", "R010", "info", 1, "2026-08-03 00:00:00"),
+test "one line per mistake: count, date, and a clickable path:line, most frequent first" {
+    const h = [_]book.Entry{
+        entry("R004", 2, "2026-08-01 00:00:00", "/p/a.zig"),
+        entry("R010", 9, "2026-08-02 00:00:00", "/p/b.zig"),
     };
-    const out = try render(&recs, .toc);
+    const out = try render(&h, .mistakes);
     defer testing.allocator.free(out);
-
-    // R010 totals 10 hits across 2 findings, so it must precede R004's 2.
-    const r10 = std.mem.find(u8, out, "R010").?;
-    const r04 = std.mem.find(u8, out, "R004").?;
-    try testing.expect(r10 < r04);
-    try testing.expect(std.mem.find(u8, out, "across 2 rules") != null);
+    try testing.expect(std.mem.find(u8, out, "    9×  2026-08-02 00:00  [R010] /p/b.zig:7  a message") != null);
+    try testing.expect(std.mem.find(u8, out, "R010").? < std.mem.find(u8, out, "R004").?);
 }
 
-test "files rolls up per file" {
-    const recs = [_]book.Record{
-        rec("a.zig", "R004", "warn", 3, "2026-08-01 00:00:00"),
-        rec("a.zig", "R010", "info", 4, "2026-08-01 00:00:00"),
-        rec("b.zig", "R010", "info", 1, "2026-08-01 00:00:00"),
-    };
-    const out = try render(&recs, .files);
+test "rules totals times across a rule's mistakes" {
+    var two = entry("R010", 1, "2026-08-03 00:00:00", "/p/c.zig");
+    two.pattern = "another";
+    const h = [_]book.Entry{ entry("R004", 2, "2026-08-01 00:00:00", "/p/a.zig"), entry("R010", 9, "2026-08-02 00:00:00", "/p/b.zig"), two };
+    const out = try render(&h, .rules);
     defer testing.allocator.free(out);
-    try testing.expect(std.mem.find(u8, out, "2 files") != null);
-    try testing.expect(std.mem.find(u8, out, "a.zig").? < std.mem.find(u8, out, "b.zig").?);
+    try testing.expect(std.mem.find(u8, out, "R010        2         10") != null);
 }
 
 test "recent is newest first and respects the limit" {
-    const recs = [_]book.Record{
-        rec("old.zig", "R001", "error", 1, "2026-08-01 00:00:00"),
-        rec("new.zig", "R002", "error", 1, "2026-08-09 00:00:00"),
-        rec("mid.zig", "R003", "error", 1, "2026-08-05 00:00:00"),
+    const h = [_]book.Entry{
+        entry("R001", 1, "2026-08-01 00:00:00", "/old.zig"),
+        entry("R002", 1, "2026-08-09 00:00:00", "/new.zig"),
+        entry("R003", 1, "2026-08-05 00:00:00", "/mid.zig"),
     };
-    const out = try render(&recs, .{ .recent = 2 });
+    const out = try render(&h, .{ .recent = 2 });
     defer testing.allocator.free(out);
-    try testing.expect(std.mem.find(u8, out, "new.zig") != null);
-    try testing.expect(std.mem.find(u8, out, "mid.zig") != null);
+    try testing.expect(std.mem.find(u8, out, "new.zig").? < std.mem.find(u8, out, "mid.zig").?);
     try testing.expect(std.mem.find(u8, out, "old.zig") == null);
 }
 
-test "rule detail reports a miss instead of an empty section" {
-    const recs = [_]book.Record{rec("a.zig", "R004", "warn", 1, "2026-08-01 00:00:00")};
-    const hit = try render(&recs, .{ .rule = "R004" });
+test "rule detail shows the source line, and a miss says so" {
+    const h = [_]book.Entry{entry("R004", 1, "2026-08-01 00:00:00", "/p/a.zig")};
+    const hit = try render(&h, .{ .rule = "R004" });
     defer testing.allocator.free(hit);
-    try testing.expect(std.mem.find(u8, hit, "caution") != null);
     try testing.expect(std.mem.find(u8, hit, "const x = 1;") != null);
-
-    const miss = try render(&recs, .{ .rule = "R999" });
+    const miss = try render(&h, .{ .rule = "R999" });
     defer testing.allocator.free(miss);
-    try testing.expect(std.mem.find(u8, miss, "no findings recorded for R999") != null);
+    try testing.expect(std.mem.find(u8, miss, "no mistakes recorded for R999") != null);
 }
 
 test "nowSeconds converts the clock's nanoseconds to seconds" {

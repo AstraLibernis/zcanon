@@ -72,9 +72,13 @@ Read the findings and fix them before moving on. To check a file by hand at any 
 `{{ZCANON}} check [--full] <file.zig>` (the hook's exact checks; exit 1 = something blocking) or
 `{{ZSNAG}} <file.zig>` (the linter alone).
 
-Findings that survive are recorded to the book (`~/.config/zcanon/book.tsv`), so `hits` counts
-real recurrences — each save re-scans the whole file and anything no longer present is pruned.
-Read it with `{{ZCANON}} book` (by rule), `book files`, `book recent [N]`, or `book R0NN`.
+Every mistake is recorded in the book (`~/.config/zcanon/book.tsv`): one line per mistake
+(rule plus message; compiler messages grouped by shape), with how many times it was made, when
+first and last, and where it last happened (`path:line`). Making it again counts +1; fixing it
+never removes the line. A finding still in the file on the next save is not counted again. A
+mistake made 5 times goes into the bug report (`bugs.md` beside the book), which is never
+pruned. Read them with `{{ZCANON}} book` (most frequent first), `book rules`, `book recent [N]`,
+`book open` (findings in the code right now), `book R0NN`, and `{{ZCANON}} bugs`.
 
 Off switch: `{{ZCANON}} disable` / `enable` toggle at runtime without touching settings.json.
 Full removal: `{{ZCANON}} uninstall`.

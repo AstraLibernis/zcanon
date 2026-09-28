@@ -157,7 +157,7 @@ test "cli: disable silences the hook without touching settings" {
     try testing.expect((try h.additionalContext(s.gpa(), r2.stdout)) != null);
 }
 
-test "cli: re-saving an unchanged file counts a recurrence, not a new finding" {
+test "cli: re-saving an unchanged file is one occurrence, not three" {
     var s = try box("hook-hits");
     defer s.deinit();
     const f = try s.write("t.zig", dirty_zig);
@@ -165,29 +165,61 @@ test "cli: re-saving an unchanged file counts a recurrence, not a new finding" {
     _ = try s.hook(f);
     _ = try s.hook(f);
 
-    // Three saves of the same unchanged file: one row per distinct finding, each at 3 hits.
-    // (There are two findings here — R004 plus an ast-check error for the undeclared `foo`.)
-    const bookfile = try s.read("config/book.tsv");
-    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, bookfile, "\n"), '\n');
+    // Three saves of the same unchanged file: the mistake was made once. (Two mistakes here:
+    // R004 plus an ast-check error for the undeclared `foo`.)
+    const history = try s.read("config/book.tsv");
+    try testing.expect(std.mem.startsWith(u8, history, "rule\tseverity\tcount"));
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, history, "\n"), '\n');
     _ = lines.next(); // header
-    var seen_r004 = false;
     var rows: usize = 0;
     while (lines.next()) |line| {
-        if (line.len == 0) continue;
         rows += 1;
         var col = std.mem.splitScalar(u8, line, '\t');
-        _ = col.next(); // first_ts
-        _ = col.next(); // last_ts
-        const hits = col.next().?;
-        _ = col.next(); // zig_version
-        _ = col.next(); // file
-        const rule = col.next().?;
-        // Every row must be a recurrence count, not a duplicate insert.
-        try testing.expectEqualStrings("3", hits);
-        if (std.mem.eql(u8, rule, "R004")) seen_r004 = true;
+        _ = col.next(); // rule
+        _ = col.next(); // severity
+        try testing.expectEqualStrings("1", col.next().?); // count
     }
-    try testing.expect(seen_r004);
     try testing.expectEqual(@as(usize, 2), rows);
+    // The open set saw each finding on all three saves.
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "\t3\t") != null);
+}
+
+test "cli: fixing a mistake keeps it in the book; making it again counts +1" {
+    var s = try box("hook-again");
+    defer s.deinit();
+    const f = try s.write("t.zig", dirty_zig);
+    _ = try s.hook(f);
+    _ = try s.write("t.zig", clean_zig);
+    _ = try s.hook(f);
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "R004") == null);
+    try testing.expect((try s.zcanon(&.{"book"})).outContains("1×"));
+
+    _ = try s.write("t.zig", dirty_zig);
+    _ = try s.hook(f);
+    const r = try s.zcanon(&.{ "book", "R004" });
+    try testing.expect(r.outContains("    2×"));
+    try testing.expect(r.outContains("t.zig:3"));
+}
+
+test "cli: a mistake made five times lands in the bug report, and stays" {
+    var s = try box("bugs");
+    defer s.deinit();
+    const f = try s.write("t.zig", dirty_zig);
+    for (0..5) |_| {
+        _ = try s.write("t.zig", dirty_zig);
+        _ = try s.hook(f);
+        _ = try s.write("t.zig", clean_zig);
+        _ = try s.hook(f);
+    }
+    const md = try s.read("config/bugs.md");
+    try testing.expect(std.mem.find(u8, md, "## [R004] catch unreachable") != null);
+    try testing.expect(std.mem.find(u8, md, "made 5 times") != null);
+    try testing.expect((try s.zcanon(&.{"bugs"})).outContains("[R004]"));
+
+    // Wiping the book does not remove it from the report.
+    try std.Io.Dir.cwd().deleteFile(s.io, try s.path("config/book.tsv"));
+    _ = try s.hook(f);
+    try testing.expect(std.mem.find(u8, try s.read("config/bugs.tsv"), "R004") != null);
 }
 
 test "cli: a syntax error does not erase the structural rules' history" {
@@ -197,14 +229,14 @@ test "cli: a syntax error does not erase the structural rules' history" {
     const leaky = "const std = @import(\"std\");\npub fn f(gpa: std.mem.Allocator) void {\n    var l: std.heap.ArenaAllocator = .init(gpa);\n    _ = l;\n}\n";
     const f = try s.write("t.zig", leaky);
     _ = try s.hook(f);
-    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R008") != null);
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "R008") != null);
 
     // Now the file stops parsing — exactly what an LLM writing stale syntax produces. R008
     // cannot run, so its silence must NOT be read as "the leak was fixed". The leak is still
     // right there in the file.
     _ = try s.write("t.zig", leaky ++ "const x = async foo();\n");
     _ = try s.hook(f);
-    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R008") != null);
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "R008") != null);
 }
 
 test "cli: the status record reports structural only when the file parses" {
@@ -221,18 +253,6 @@ test "cli: the status record reports structural only when the file parses" {
     try testing.expect(std.mem.find(u8, b.stdout, "\"core\"") != null);
 }
 
-test "cli: fixing the problem prunes it from the book" {
-    var s = try box("hook-prune-fix");
-    defer s.deinit();
-    const f = try s.write("t.zig", dirty_zig);
-    _ = try s.hook(f);
-    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R004") != null);
-
-    _ = try s.write("t.zig", clean_zig);
-    _ = try s.hook(f);
-    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R004") == null);
-}
-
 // ---- the book --------------------------------------------------------------
 
 test "cli: book reports render, and an empty book says so" {
@@ -245,23 +265,37 @@ test "cli: book reports render, and an empty book says so" {
     _ = try s.hook(f);
 
     try testing.expect((try s.zcanon(&.{"book"})).outContains("R004"));
-    try testing.expect((try s.zcanon(&.{ "book", "files" })).outContains("t.zig"));
+    try testing.expect((try s.zcanon(&.{ "book", "open" })).outContains("t.zig"));
+    try testing.expect((try s.zcanon(&.{ "book", "rules" })).outContains("R004"));
     try testing.expect((try s.zcanon(&.{ "book", "recent", "5" })).outContains("R004"));
     try testing.expect((try s.zcanon(&.{ "book", "R004" })).outContains("catch unreachable"));
-    try testing.expect((try s.zcanon(&.{ "book", "R999" })).outContains("no findings recorded"));
+    try testing.expect((try s.zcanon(&.{ "book", "R999" })).outContains("no mistakes recorded"));
 }
 
-test "cli: prune drops findings for files that no longer exist" {
+test "cli: prune forgets open findings in deleted files, never the history" {
     var s = try box("prune");
     defer s.deinit();
     const f = try s.write("gone.zig", dirty_zig);
     _ = try s.hook(f);
-    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R004") != null);
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "R004") != null);
 
     try std.Io.Dir.cwd().deleteFile(s.io, f);
     const r = try s.zcanon(&.{"prune"});
     try testing.expectEqual(@as(u8, 0), r.code);
-    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R004") == null);
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "R004") == null);
+    try testing.expect(std.mem.find(u8, try s.read("config/book.tsv"), "R004") != null);
+}
+
+test "cli: an old per-finding book is migrated into the history" {
+    var s = try box("migrate");
+    defer s.deinit();
+    _ = try s.write("config/book.tsv", "first_ts\tlast_ts\thits\tzig_version\tfile\trule\tseverity\tline\tcol\tmessage\tsnippet\n" ++
+        "2026-09-01 10:00:00\t2026-09-02 10:00:00\t4\t0.16.0\t/p/a.zig\tR004\twarn\t3\t5\tcatch unreachable\tx() catch unreachable;\n");
+    try testing.expect((try s.zcanon(&.{"book"})).outContains("1×  2026-09-01 10:00  [R004] /p/a.zig:3"));
+    const f = try s.write("t.zig", clean_zig);
+    _ = try s.hook(f);
+    try testing.expect(std.mem.startsWith(u8, try s.read("config/book.tsv"), "rule\t"));
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "/p/a.zig") != null);
 }
 
 // ---- zsnag -----------------------------------------------------------------

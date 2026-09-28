@@ -291,3 +291,58 @@ test "groupOf reads the registry: R014 is core, R011-R013 are map, R008 structur
     try testing.expectEqualStrings("ast", book.groupOf("ast-check"));
     try testing.expectEqualStrings("core", book.groupOf("R099")); // a removed rule
 }
+
+test "history: a mistake is one line; each occurrence bumps its count, date and location" {
+    var h: book.History = .init(testing.allocator);
+    defer h.deinit();
+    var r = rec("/p/a.zig", "R004", "catch unreachable", "x() catch unreachable;");
+    try h.bump(r, "2026-09-28 10:00:00");
+    r.file = "/p/b.zig";
+    r.line = 42;
+    try h.bump(r, "2026-09-28 11:00:00");
+    try testing.expectEqual(@as(usize, 1), h.entries.items.len);
+    const e = h.entries.items[0];
+    try testing.expectEqual(@as(u64, 2), e.count);
+    try testing.expectEqualStrings("2026-09-28 10:00:00", e.first_ts);
+    try testing.expectEqualStrings("2026-09-28 11:00:00", e.last_ts);
+    try testing.expectEqualStrings("/p/b.zig", e.file);
+    try testing.expectEqual(@as(u32, 42), e.line);
+}
+
+test "history: compiler messages group by shape, zsnag messages by text" {
+    var h: book.History = .init(testing.allocator);
+    defer h.deinit();
+    try h.bump(rec("/a.zig", "compile", "expected type 'u32', found 'bool'", ""), "2026-09-28 10:00:00");
+    try h.bump(rec("/a.zig", "compile", "expected type 'i64', found '[]const u8'", ""), "2026-09-28 10:01:00");
+    try h.bump(rec("/a.zig", "R011", "`std.mem.indexOf` is deprecated", ""), "2026-09-28 10:02:00");
+    try h.bump(rec("/a.zig", "R011", "`std.fs.cwd` is deprecated", ""), "2026-09-28 10:03:00");
+    try testing.expectEqual(@as(usize, 3), h.entries.items.len);
+    try testing.expectEqualStrings("expected type '…', found '…'", h.entries.items[0].pattern);
+    try testing.expectEqual(@as(u64, 2), h.entries.items[0].count);
+}
+
+test "history round-trips through its TSV" {
+    var h: book.History = .init(testing.allocator);
+    defer h.deinit();
+    try h.bump(rec("/p/a\tb.zig", "R004", "msg", "tab\there"), "2026-09-28 10:00:00");
+    var w: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer w.deinit();
+    try h.write(&w.writer);
+    var back: book.History = .init(testing.allocator);
+    defer back.deinit();
+    try back.parse(w.written());
+    try testing.expectEqualStrings("/p/a\tb.zig", back.entries.items[0].file);
+    try testing.expectEqualStrings("tab\there", back.entries.items[0].snippet);
+    try testing.expect(!book.isOpenFormat(w.written()));
+}
+
+test "upsertTracking reports only findings that were not already open" {
+    var b: book.Book = .init(testing.allocator);
+    defer b.deinit();
+    var new: std.ArrayList(book.Record) = .empty;
+    defer new.deinit(testing.allocator);
+    const r = rec("a.zig", "R004", "m", "s");
+    try b.upsertTracking(&.{r}, &new);
+    try b.upsertTracking(&.{r}, &new);
+    try testing.expectEqual(@as(usize, 1), new.items.len);
+}
