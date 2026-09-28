@@ -56,9 +56,12 @@ running (`zig build check --watch -fincremental`), and every hook reports the la
 `▲ [compile] path:line:col  message`. The hook never waits for the compiler, so an edit's own
 errors usually arrive with the *next* edit, and a result that predates the edit says so. The
 process exits after 30 idle minutes. `{{ZCANON}} daemon status` / `daemon stop` inspect or stop it.
-- The project needs a `check` step. When it has none, the hook says so once: **ask the user**
-  before running `{{ZCANON}} add-check <project>`. That command edits build.zig, verifies the
-  build still configures, and restores the original if not.
+- Any project with a build.zig is covered, with nothing to set up. zcanon uses the project's own
+  `check` step when it has one. Otherwise it writes its own build file under
+  `~/.config/zcanon/wrap/`, which loads the project as a dependency; the project's build.zig
+  is only read. A project with no build.zig gets the syntax and footgun checks only.
+- It checks for the host OS. Code built only for another OS (a Windows GUI checked on Linux) is
+  not analysed unless that target is added: `{{ZCANON}} targets <project> x86_64-windows`.
 - `zig build check` only analyses code reachable from the project's artifacts and tests; an
   unused function is not type-checked until something calls it.
 
@@ -72,7 +75,8 @@ Read the findings and fix them before moving on. To check a file by hand at any 
 `{{ZCANON}} check [--full] <file.zig>` (the hook's exact checks; exit 1 = something blocking) or
 `{{ZSNAG}} <file.zig>` (the linter alone).
 
-Every mistake is recorded in the book (`~/.config/zcanon/book.tsv`): one line per mistake
+The first time zcanon sees a file, what is already in it is its baseline: tracked, not counted
+as a mistake, except lines the edit itself wrote. After that, every mistake is recorded in the book (`~/.config/zcanon/book.tsv`): one line per mistake
 (rule plus message; compiler messages grouped by shape), with how many times it was made, when
 first and last, and where it last happened (`path:line`). Making it again counts +1; fixing it
 never removes the line. A finding still in the file on the next save is not counted again. A

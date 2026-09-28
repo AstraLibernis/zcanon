@@ -8,7 +8,10 @@
 //!     the 9.5 MB table (~1.8 ms) on every edit;
 //!   - Zig's incremental compiler, `zig build check --watch -fincremental`, so every edit is
 //!     semantically checked (types, calls, fields) in ~10 ms — errors `zig ast-check` cannot
-//!     see at all. Needs the project's `check` step; see `semantic.addCheck`.
+//!     see at all. A project with its own `check` step is watched directly. Any other project
+//!     is watched through a build file zcanon writes for it under `~/.config/zcanon/wrap/`,
+//!     which loads the project as a dependency and adds the step there (`semantic.wrapper`):
+//!     the project's own build.zig is only ever read.
 //!
 //! The hook never waits on the compiler: it reports the last finished build and says when
 //! that build predates the edit. Anything wrong with the daemon (not running, stale binary,
@@ -19,7 +22,7 @@
 //!   → `zcanon-daemon 1`, `cmd query|status|stop`, `exe <stamp>`, `key <path>`…, blank line
 //!   ← `ok` | `stale`, then `zig <ver>`, `map ok|missing <why>`, `row <tsv>`…,
 //!     `sem <state>\t<finished ns>\t<detail>`, `diag <path>\t<line>\t<col>\t<sev>\t<msg>`…,
-//!     `offer <text>`, `end`
+//!     `end`
 const std = @import("std");
 const builtin = @import("builtin");
 const vars = @import("vars.zig");
@@ -56,6 +59,11 @@ pub fn unusable(c: vars.Ctx, root: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Per-project extra targets for the background compiler.
+pub fn targetsPath(c: vars.Ctx) ![]const u8 {
+    return std.fs.path.join(c.gpa, &.{ try vars.configDir(c), "targets.tsv" });
+}
+
 /// This binary's identity: path and modification time. A daemon started by an older build
 /// answers `stale` and exits, so a rebuilt zcanon never talks to old code.
 pub fn exeStamp(c: vars.Ctx) ![]const u8 {
@@ -67,8 +75,6 @@ pub fn exeStamp(c: vars.Ctx) ![]const u8 {
 // ---- client ------------------------------------------------------------------
 
 pub const SemState = enum {
-    /// build.zig has no `check` step; semantic checks are off for this project.
-    no_check,
     /// The watcher has not finished its first build yet.
     starting,
     ok,
@@ -87,7 +93,6 @@ pub const Reply = struct {
     finished_ns: i96 = 0,
     detail: []const u8 = "",
     diags: []semantic.Diag = &.{},
-    offer: []const u8 = "",
 };
 
 pub const Cmd = enum { query, status, stop };
@@ -150,8 +155,6 @@ fn requestInner(c: vars.Ctx, root: []const u8, cmd: Cmd, keys: ?*const zephem.Ke
                 .severity = if (std.mem.eql(u8, f.next() orelse "", "error")) "error" else "note",
                 .message = try c.gpa.dupe(u8, f.rest()),
             });
-        } else if (std.mem.eql(u8, tag, "offer")) {
-            reply.offer = try c.gpa.dupe(u8, val);
         }
     }
     if (map_ok) reply.rows = rows.items;
@@ -195,7 +198,6 @@ const Daemon = struct {
     /// The last finished build's diagnostics; owned by `diag_text` (one allocation each).
     diags: std.ArrayList(semantic.Diag) = .empty,
     diag_text: std.ArrayList([]u8) = .empty,
-    offered: bool = false,
     watcher_pid: ?std.posix.pid_t = null,
     stopping: bool = false,
 
@@ -305,10 +307,6 @@ const Daemon = struct {
         } else try out.print("map missing {s}\n", .{d.map_missing});
         try out.print("sem {t}\t{d}\t{s}\n", .{ d.sem, d.finished_ns, d.detail });
         for (d.diags.items) |x| try out.print("diag {s}\t{d}\t{d}\t{s}\t{s}\n", .{ x.path, x.line, x.col, x.severity, x.message });
-        if (d.sem == .no_check and !d.offered and cmd == .query) {
-            d.offered = true;
-            try out.print("offer {s}\n", .{d.root});
-        }
         try out.writeAll("end\n");
         try out.flush();
     }
@@ -340,27 +338,42 @@ const Daemon = struct {
         return st.mtime.nanoseconds;
     }
 
-    /// Run the watcher; restart it when it exits, and wait for build.zig to change while there
-    /// is no `check` step or build.zig does not build.
+    /// Where to run the watcher: the project itself when it has a `check` step, else the
+    /// build file zcanon writes for it. Null when build.zig does not build.
+    ///
+    /// Extra targets (`zcanon targets`) always go through zcanon's build file, even for a
+    /// project with its own `check` step, which knows only the host.
+    fn checkDir(d: *Daemon) !?[]const u8 {
+        const has = d.hasCheckStep() orelse return null;
+        const targets = try semantic.readTargets(d.c.gpa, d.c.io, try targetsPath(d.c), d.root);
+        if (has and targets.len == 0) return d.root;
+        const base = try basePath(d.c, d.root);
+        const dir = try vars.absolute(d.c, try std.fs.path.join(d.c.gpa, &.{ std.fs.path.dirname(std.fs.path.dirname(base).?).?, "wrap", std.fs.path.basename(base) }));
+        try semantic.writeWrapper(d.c.gpa, d.c.io, dir, d.root, targets);
+        return dir;
+    }
+
+    /// Run the watcher; restart it when it exits, and wait for build.zig to change while it
+    /// does not build.
     fn watchLoop(d: *Daemon) void {
         var quick_exits: u32 = 0;
         while (!d.stopping) {
             const seen_mtime = d.buildZigMtime();
-            const has = d.hasCheckStep();
-            if (has == null or has.? == false) {
-                if (has == null)
-                    d.setState(.down, "build.zig does not build (`zig build -l` failed); waiting for it to change")
-                else
-                    d.setState(.no_check, "");
+            const dir = d.checkDir() catch |e| {
+                d.setState(.down, @errorName(e));
+                d.c.io.sleep(.fromSeconds(5), .awake) catch return;
+                continue;
+            } orelse {
+                d.setState(.down, "build.zig does not build (`zig build -l` failed); waiting for it to change");
                 while (!d.stopping and d.buildZigMtime() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
                 continue;
-            }
+            };
             const began = d.now();
-            d.runWatcher() catch {}; // zsnag:ok — exit is handled below, whatever the cause
+            d.runWatcher(dir) catch {}; // zsnag:ok — exit is handled below, whatever the cause
             if (d.stopping) return;
             if (d.now() - began < 60 * std.time.ns_per_s) quick_exits += 1 else quick_exits = 0;
             if (quick_exits >= 5) {
-                d.setState(.down, "`zig build check --watch` keeps exiting; run it by hand to see why");
+                d.setState(.down, "the compiler watcher keeps exiting; run `zig build check` in the project (or `zig build` if it has no check step) to see why");
                 while (!d.stopping and d.buildZigMtime() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
                 quick_exits = 0;
                 continue;
@@ -370,13 +383,13 @@ const Daemon = struct {
         }
     }
 
-    fn runWatcher(d: *Daemon) !void {
+    fn runWatcher(d: *Daemon, dir: []const u8) !void {
         d.setState(.starting, "");
         var child = try std.process.spawn(d.c.io, .{
             // A short debounce: with 0 the watcher compiled a half-written file and reported
             // an error that was not there.
             .argv = &.{ "zig", "build", "check", "--watch", "-fincremental", "--debounce", "50" },
-            .cwd = .{ .path = d.root },
+            .cwd = .{ .path = dir },
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .pipe,

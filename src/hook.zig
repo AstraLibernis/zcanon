@@ -43,6 +43,55 @@ pub fn filePathFromPayload(arena: std.mem.Allocator, payload: []const u8) !?[]co
     };
 }
 
+/// What the tool wrote, for telling the model's own new mistakes from code already in a file
+/// zcanon had not seen before: Write authors the whole file; Edit and MultiEdit author their
+/// `new_string`s; anything else (a shell command) is unknown.
+pub const Authored = union(enum) {
+    whole_file,
+    text: []const u8,
+    unknown,
+
+    /// Did this tool write the (trimmed) source line `snippet`?
+    pub fn wrote(a: Authored, snippet: []const u8) bool {
+        return switch (a) {
+            .whole_file => true,
+            .text => |t| snippet.len > 0 and std.mem.find(u8, t, snippet) != null,
+            .unknown => false,
+        };
+    }
+};
+
+pub fn authoredFromPayload(arena: std.mem.Allocator, payload: []const u8) Authored {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{}) catch return .unknown;
+    const obj = switch (parsed) {
+        .object => |o| o,
+        else => return .unknown,
+    };
+    const tool = strField(obj, "tool_name") orelse return .unknown;
+    const ti = switch (obj.get("tool_input") orelse return .unknown) {
+        .object => |o| o,
+        else => return .unknown,
+    };
+    if (std.mem.eql(u8, tool, "Write")) return .whole_file;
+    if (std.mem.eql(u8, tool, "Edit")) return .{ .text = strField(ti, "new_string") orelse return .unknown };
+    if (std.mem.eql(u8, tool, "MultiEdit")) {
+        const edits = switch (ti.get("edits") orelse return .unknown) {
+            .array => |a| a,
+            else => return .unknown,
+        };
+        var all: std.ArrayList(u8) = .empty;
+        for (edits.items) |e| switch (e) {
+            .object => |o| if (strField(o, "new_string")) |ns| {
+                all.appendSlice(arena, ns) catch return .unknown;
+                all.append(arena, '\n') catch return .unknown;
+            },
+            else => {},
+        };
+        return .{ .text = all.items };
+    }
+    return .unknown;
+}
+
 /// The tool that fired the hook (`Edit`, `Write`, `Bash`, …), or null.
 pub fn toolNameFromPayload(arena: std.mem.Allocator, payload: []const u8) ?[]const u8 {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{}) catch return null;

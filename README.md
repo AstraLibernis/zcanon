@@ -102,9 +102,11 @@ the hook to the full layout; `zcanon view short` switches back. Wiring it into a
 it. So on the first `.zig` edit in a project, the hook also starts a background process for
 that project. It does two things:
 
-- keeps Zig's incremental compiler running on the project's `check` step
-  (`zig build check --watch -fincremental`), which re-checks the whole project in ~10 ms after
-  an edit (~240 ms cold);
+- keeps Zig's incremental compiler running (`zig build check --watch -fincremental`), which
+  re-checks the whole project in ~10 ms after an edit (~1-2 s for the first check). It uses
+  the project's own `check` step if there is one. Otherwise zcanon writes a build file of its
+  own under `~/.config/zcanon/wrap/` that loads the project as a dependency and adds the step
+  there, so every project with a build.zig is covered and none is edited;
 - keeps the zephem map loaded, which cuts the hook itself from ~3 ms to ~1.2 ms.
 
 The hook reports the compiler's latest result and never waits for it, so an edit's errors show
@@ -112,9 +114,13 @@ up on the next edit. The process exits after 30 idle minutes, answers only to th
 that started it (a rebuilt zcanon replaces it), and on any problem the hook simply does all the
 work itself. `zcanon daemon status [dir]` and `zcanon daemon stop [dir]` inspect or stop it.
 
-A project without a `check` step gets a one-time note. `zcanon add-check [dir]` adds one: a
-small function appended to build.zig that type-checks every artifact the install and test steps
-build, without emitting binaries. It verifies the build still configures, and puts the original
+It checks for the host OS only, so code that a project builds only for another OS is not
+analysed. `zcanon targets <dir> x86_64-windows` adds a target; `none` clears. On zmural, a
+type error in the Windows-only settings window was caught only once Windows was added.
+
+`zcanon add-check [dir]` is optional: it puts a `check` step into the project's own build.zig,
+for anyone who wants `zig build check` by hand. It appends a small function that type-checks
+every artifact the install and test steps build, without emitting binaries. It verifies the build still configures, and puts the original
 back if not (a copy is also kept under `~/.config/zcanon/backups`).
 
 ### Day to day

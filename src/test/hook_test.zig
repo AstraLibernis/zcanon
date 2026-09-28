@@ -400,3 +400,18 @@ test "the lookup hint: always in the full view, only for map rules in the short 
     try testing.expect(!hook.wantsHint(.short, &core));
     try testing.expect(hook.wantsHint(.short, &map));
 }
+
+test "authored: Write wrote everything, Edit its new_string, a shell command nothing known" {
+    var a = arena();
+    defer a.deinit();
+    const w = hook.authoredFromPayload(a.allocator(), "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/x.zig\",\"content\":\"a\"}}");
+    try testing.expect(w.wrote("anything"));
+    const e = hook.authoredFromPayload(a.allocator(), "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"/x.zig\",\"new_string\":\"x() catch unreachable;\\ny();\"}}");
+    try testing.expect(e.wrote("x() catch unreachable;"));
+    try testing.expect(!e.wrote("z() catch unreachable;"));
+    try testing.expect(!e.wrote(""));
+    const m = hook.authoredFromPayload(a.allocator(), "{\"tool_name\":\"MultiEdit\",\"tool_input\":{\"file_path\":\"/x.zig\",\"edits\":[{\"new_string\":\"p();\"},{\"new_string\":\"q();\"}]}}");
+    try testing.expect(m.wrote("q();"));
+    const b = hook.authoredFromPayload(a.allocator(), "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i x\"}}");
+    try testing.expect(!b.wrote("x"));
+}

@@ -104,3 +104,45 @@ test "semantic block: errors only in the short view, notes in the full one, stal
     // Notes alone are nothing to report.
     try testing.expectEqual(@as(?[]const u8, null), try hook.renderSemantic(a.allocator(), "/p", diags[1..], false, .short));
 }
+
+test "targets round-trip per project, and none clears a project" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    const path = try std.fs.path.join(gpa, &.{ dir, "targets.tsv" });
+
+    try semantic.writeTargets(gpa, io, path, "/p/one", &.{ "x86_64-windows", "aarch64-macos" });
+    try semantic.writeTargets(gpa, io, path, "/p/two", &.{"x86_64-windows"});
+    const one = try semantic.readTargets(gpa, io, path, "/p/one");
+    try testing.expectEqual(@as(usize, 2), one.len);
+    try testing.expectEqualStrings("aarch64-macos", one[1]);
+    try semantic.writeTargets(gpa, io, path, "/p/one", &.{});
+    try testing.expectEqual(@as(usize, 0), (try semantic.readTargets(gpa, io, path, "/p/one")).len);
+    try testing.expectEqual(@as(usize, 1), (try semantic.readTargets(gpa, io, path, "/p/two")).len);
+}
+
+test "the generated build file is valid Zig and names the targets" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+
+    try semantic.writeWrapper(gpa, io, dir, "/home/u/proj", &.{"x86_64-windows"});
+    const build = try std.Io.Dir.cwd().readFileAllocOptions(io, try std.fs.path.join(gpa, &.{ dir, "build.zig" }), gpa, .unlimited, .of(u8), 0);
+    const tree = try std.zig.Ast.parse(gpa, build, .zig);
+    try testing.expectEqual(@as(usize, 0), tree.errors.len);
+    try testing.expect(std.mem.find(u8, build, "\"x86_64-windows\"") != null);
+    const zon = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(gpa, &.{ dir, "build.zig.zon" }), gpa, .unlimited);
+    try testing.expect(std.mem.find(u8, zon, ".path = \"") != null);
+}

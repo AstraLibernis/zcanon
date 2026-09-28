@@ -201,6 +201,23 @@ test "cli: fixing a mistake keeps it in the book; making it again counts +1" {
     try testing.expect(r.outContains("t.zig:3"));
 }
 
+test "cli: a file's first scan is a baseline: old code is not counted, the edit's own lines are" {
+    var s = try box("baseline");
+    defer s.deinit();
+    // An existing file with a mistake zcanon has never seen, then an Edit elsewhere in it.
+    const f = try s.write("t.zig", dirty_zig);
+    const edit = try std.fmt.allocPrint(s.gpa(), "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f},\"new_string\":\"_ = n;\"}}}}", .{std.json.fmt(f, .{})});
+    _ = try s.zcanonStdin(&.{"hook"}, edit);
+    try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "R004") != null); // tracked
+    try testing.expect((try s.zcanon(&.{"book"})).outContains("the book is empty")); // not counted
+
+    // Now an Edit that writes a second `catch unreachable` of its own: counted.
+    _ = try s.write("t.zig", dirty_zig ++ "fn g() void {\n    bar() catch unreachable;\n}\n");
+    const edit2 = try std.fmt.allocPrint(s.gpa(), "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f},\"new_string\":\"    bar() catch unreachable;\"}}}}", .{std.json.fmt(f, .{})});
+    _ = try s.zcanonStdin(&.{"hook"}, edit2);
+    try testing.expect((try s.zcanon(&.{ "book", "R004" })).outContains("    1×"));
+}
+
 test "cli: a mistake made five times lands in the bug report, and stays" {
     var s = try box("bugs");
     defer s.deinit();
@@ -573,12 +590,13 @@ test "cli: add-check restores build.zig when the result does not build" {
     try testing.expectEqualStrings(own, try s.read("proj/build.zig"));
 }
 
-test "cli: the daemon reports a type error ast-check cannot see, then stops" {
+test "cli: the daemon reports a type error ast-check cannot see, in a project with no check step" {
     var s = try box("daemon");
     defer s.deinit();
+    // No `check` step and no add-check: the daemon checks through its own build file, and the
+    // project's build.zig is left exactly as it was.
     _ = try s.write("proj/build.zig", demo_build);
     const main = try s.write("proj/main.zig", "pub fn main() void {\n    const x: u32 = \"five\";\n    _ = x;\n}\n");
-    try testing.expectEqual(@as(u8, 0), (try s.zcanon(&.{ "add-check", try s.path("proj") })).code);
     const on = [_][2][]const u8{.{ "ZCANON_DAEMON", "1" }};
     const proj = try s.path("proj");
     // Stop it even when an assertion below fails. zsnag:ok — nothing to do if already gone
@@ -595,7 +613,8 @@ test "cli: the daemon reports a type error ast-check cannot see, then stops" {
         if (ctx != null and std.mem.find(u8, ctx.?, "[compile]") != null) break;
     }
     try testing.expect(ctx != null);
-    try testing.expect(std.mem.find(u8, ctx.?, "[compile] main.zig:2:20  expected type 'u32'") != null);
+    try testing.expect(std.mem.find(u8, ctx.?, "main.zig:2:20  expected type 'u32'") != null);
+    try testing.expectEqualStrings(demo_build, try s.read("proj/build.zig"));
 
     const st = try s.zcanonEnv(&.{ "daemon", "status", proj }, &on);
     try testing.expect(std.mem.find(u8, st.stdout, "compiler errors") != null);

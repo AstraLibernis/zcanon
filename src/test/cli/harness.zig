@@ -87,13 +87,13 @@ pub const Sandbox = struct {
         return s.runTool("zcanon", args, null);
     }
 
-    /// Run `zcanon hook` with `payload` on stdin.
+    /// Run `zcanon hook` as after a Write of `file` (the tests write whole files).
     pub fn hook(s: *Sandbox, file: []const u8) !Result {
         // JSON-escape the path: Windows paths carry backslashes, which are invalid JSON
         // escapes when pasted raw (Claude Code itself escapes them).
         const payload = try std.fmt.allocPrint(
             s.gpa(),
-            "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f}}}}}",
+            "{{\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{f}}}}}",
             .{std.json.fmt(file, .{})},
         );
         return s.runTool("zcanon", &.{"hook"}, payload);
@@ -103,7 +103,7 @@ pub const Sandbox = struct {
     pub fn hookEnv(s: *Sandbox, file: []const u8, extra: []const [2][]const u8) !Result {
         const payload = try std.fmt.allocPrint(
             s.gpa(),
-            "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f}}}}}",
+            "{{\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{f}}}}}",
             .{std.json.fmt(file, .{})},
         );
         return s.runToolEnv("zcanon", &.{"hook"}, payload, extra);

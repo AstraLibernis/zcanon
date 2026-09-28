@@ -34,8 +34,11 @@ const usage =
     \\  status             is it installed, and is it enabled?
     \\  disable | enable   toggle at runtime without touching settings.json
     \\  view [short|full]  how the hook reports findings (default short); no argument prints it
-    \\  add-check [dir]    add a `check` step to dir's build.zig (default: .), so the background
-    \\                     compiler can report semantic errors on every edit
+    \\  add-check [dir]    add a `check` step to dir's build.zig (default: .). Optional: without
+    \\                     one, zcanon checks the project through a build file of its own
+    \\  targets [dir] [triple...]
+    \\                     also check dir's project for these targets (e.g. x86_64-windows),
+    \\                     so code built only for another OS is checked too; `none` clears
     \\  daemon status|stop [dir]
     \\                     the project's background process (started by the hook; exits when idle)
     \\  book [report]      the book: every mistake, how often, when, and where it last was:
@@ -71,6 +74,7 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "view")) return runView(c, rest);
     if (std.mem.eql(u8, cmd, "add-check")) return runAddCheck(c, rest);
     if (std.mem.eql(u8, cmd, "daemon")) return runDaemon(c, rest);
+    if (std.mem.eql(u8, cmd, "targets")) return runTargets(c, rest);
     if (std.mem.eql(u8, cmd, "book")) return runBook(c, rest);
     if (std.mem.eql(u8, cmd, "prune")) return runPrune(c);
     if (std.mem.eql(u8, cmd, "bugs")) return runBugs(c);
@@ -138,6 +142,7 @@ fn runHook(c: vars.Ctx) !void {
 
     const files = try readAll(c, paths.items);
     var run = try Run.init(c, files);
+    run.authored = hook.authoredFromPayload(c.gpa, payload);
     try addNotices(c.gpa, &notices, run.notices.items);
     for (files, 0..) |f, i| {
         const src = f.src orelse continue;
@@ -307,6 +312,13 @@ const Run = struct {
     /// The open set and the history, loaded on first `record` and written by `finish`.
     ledger: ?book.Book = null,
     history: ?book.History = null,
+    /// Every file zcanon has scanned before. A file's first scan is its BASELINE: what was
+    /// already in it is not a mistake made now, so it is recorded as open without counting —
+    /// unless `authored` shows this tool call wrote it.
+    seen: std.StringHashMapUnmanaged(void) = .empty,
+    seen_added: std.ArrayList([]const u8) = .empty,
+    /// What the hook's tool call wrote; `.unknown` for `zcanon check` and shell edits.
+    authored: hook.Authored = .unknown,
     ledger_failed: ?anyerror = null,
     /// This run's timestamp, "" if the clock is unusable.
     now: []const u8 = "",
@@ -400,16 +412,9 @@ const Run = struct {
         const c = r.c;
         for (r.sem.items) |s| {
             const rep = s.reply;
-            if (rep.offer.len > 0) try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(
-                c.gpa,
-                "\n\nℹ semantic checks are off for {s}: its build.zig has no `check` step. Ask the user " ++
-                    "whether to add one with `zcanon add-check {s}`; the compiler then type-checks every edit.",
-                .{ rep.offer, rep.offer },
-            )});
             switch (rep.sem) {
                 .starting => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⋯ the background compiler for {s} is on its first build; its errors follow on a later edit.", .{s.root})}),
                 .down => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⚠ semantic checks are down for {s}: {s}", .{ s.root, rep.detail })}),
-                .no_check => {},
                 .ok, .errors => {
                     // A build that finished after the newest edit speaks for the project now:
                     // record its errors, and close the ones it no longer reports.
@@ -516,16 +521,36 @@ const Run = struct {
     fn recordInner(r: *Run, scope: book.Book.Scope, fresh: []const book.Record, active: []const []const u8) !void {
         if (r.now.len == 0) return error.NegativeTimestamp;
         if (r.ledger == null) try r.load();
+        // First sight of a file: take its baseline (compiler results speak for a whole project
+        // and are always counted).
+        const first_sight = switch (scope) {
+            .file => |f| !r.seen.contains(f),
+            .under => false,
+        };
+        if (first_sight) {
+            const f = try r.c.gpa.dupe(u8, scope.file);
+            try r.seen.put(r.c.gpa, f, {});
+            try r.seen_added.append(r.c.gpa, f);
+        }
         // A finding not already open is a new occurrence: +1 to its mistake in the history.
         var new: std.ArrayList(book.Record) = .empty;
         r.ledger.?.prune(scope, fresh, active);
         try r.ledger.?.upsertTracking(fresh, &new);
-        for (new.items) |n| try r.history.?.bump(n, r.now);
+        for (new.items) |n| {
+            if (first_sight and !r.authored.wrote(n.snippet)) continue;
+            try r.history.?.bump(n, r.now);
+        }
     }
 
     /// Write the open set, the history, and the bug report.
     fn save(r: *Run, open: *const book.Book, history: *const book.History) !void {
         try writeBook(r.c, open, try openPath(r.c));
+        if (r.seen_added.items.len > 0) {
+            var w: std.Io.Writer.Allocating = .init(r.c.gpa);
+            var it = r.seen.keyIterator();
+            while (it.next()) |k| try w.writer.print("{s}\n", .{k.*});
+            try std.Io.Dir.cwd().writeFile(r.c.io, .{ .sub_path = try sidePath(r.c, "seen.txt"), .data = w.written() });
+        }
         try writeHistory(r.c, history);
         try updateBugs(r.c, history.entries.items, r.now);
     }
@@ -535,6 +560,11 @@ const Run = struct {
         r.ledger = .init(r.c.gpa);
         r.history = .init(r.c.gpa);
         try loadLedger(r.c, &r.ledger.?, &r.history.?);
+        const text = std.Io.Dir.cwd().readFileAlloc(r.c.io, try sidePath(r.c, "seen.txt"), r.c.gpa, .unlimited) catch "";
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |l| if (l.len > 0) try r.seen.put(r.c.gpa, l, {});
+        // A file with open findings has been scanned before (books older than seen.txt).
+        for (r.ledger.?.recs.items) |rec| try r.seen.put(r.c.gpa, rec.file, {});
     }
 
     /// Write the book, then fold it into the bug report. Returns a notice when either failed.
@@ -599,10 +629,15 @@ fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
     if (blocking) std.process.exit(1);
 }
 
+/// A file kept beside the book.
+fn sidePath(c: vars.Ctx, name: []const u8) ![]const u8 {
+    const book_path = try vars.bookPath(c);
+    return std.fs.path.join(c.gpa, &.{ std.fs.path.dirname(book_path) orelse ".", name });
+}
+
 /// The open set lives beside the book.
 fn openPath(c: vars.Ctx) ![]const u8 {
-    const book_path = try vars.bookPath(c);
-    return std.fs.path.join(c.gpa, &.{ std.fs.path.dirname(book_path) orelse ".", "open.tsv" });
+    return sidePath(c, "open.tsv");
 }
 
 fn writeHistory(c: vars.Ctx, h: *const book.History) !void {
@@ -743,6 +778,34 @@ fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
             "The background compiler picks it up on the next .zig edit; `zig build check` runs it by hand.\n",
         .{ path, backup },
     );
+    try w.interface.flush();
+}
+
+/// `zcanon targets [dir] [triple... | none]`: show or set the extra targets the background
+/// compiler checks a project for. Setting stops the project's daemon; the next edit starts
+/// it with the new targets.
+fn runTargets(c: vars.Ctx, args: []const []const u8) !void {
+    const dir = try vars.absolute(c, if (args.len > 0) args[0] else ".");
+    const root = (try semantic.projectRoot(c.gpa, c.io, try std.fs.path.join(c.gpa, &.{ dir, "x.zig" }))) orelse
+        return fail(c, try std.fmt.allocPrint(c.gpa, "no build.zig at or above {s}\n", .{dir}));
+    const path = try daemon.targetsPath(c);
+    var buf: [1024]u8 = undefined;
+    var w = stdout(c, &buf);
+    if (args.len > 1) {
+        var set: std.ArrayList([]const u8) = .empty;
+        for (args[1..]) |t| {
+            if (std.mem.eql(u8, t, "none")) continue;
+            _ = std.Target.Query.parse(.{ .arch_os_abi = t }) catch
+                return fail(c, try std.fmt.allocPrint(c.gpa, "not a Zig target triple: {s} (try x86_64-windows, aarch64-macos)\n", .{t}));
+            try set.append(c.gpa, t);
+        }
+        try semantic.writeTargets(c.gpa, c.io, path, root, set.items);
+        _ = daemon.request(c, root, .stop, null);
+    }
+    const now = try semantic.readTargets(c.gpa, c.io, path, root);
+    try w.interface.print("{s}: checked for the host", .{root});
+    for (now) |t| try w.interface.print(" + {s}", .{t});
+    try w.interface.writeAll("\n");
     try w.interface.flush();
 }
 
