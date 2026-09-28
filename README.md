@@ -1,6 +1,10 @@
 # zcanon
 
-A portable **Zig-mistake guard for an LLM**. Drop it next to Claude (or any coding agent)
+> **Currently built for [Claude Code](https://claude.com/claude-code) only.** The automatic
+> hook, `zcanon setup` and the skill all target Claude Code. Other AI coding tools are not
+> supported yet.
+
+A **Zig-mistake guard for an LLM**. Install it next to Claude Code
 and it catches the errors an LLM tends to make in Zig — removed builtins, footguns, leaks —
 the moment they're written, and logs them so the recurring ones can be pre-empted.
 
@@ -74,17 +78,18 @@ printing the exact command that fixes it:
 Run it again at any time; it only changes what is wrong. `zcanon doctor` runs the same checks
 and changes nothing, so it is the first thing to try if findings ever stop appearing.
 
-### Other coding agents
+### Other AI tools
 
-The hook speaks Claude Code's PostToolUse protocol. Any other agent that can run a command
-after it edits a file can get the same checks with:
+Not supported yet: zcanon is built for Claude Code only. The hook speaks Claude Code's
+PostToolUse protocol and `zcanon setup` installs into Claude Code's settings. The checks
+themselves can still be run by hand on any file:
 
 ```sh
 zig-out/bin/zcanon check path/to/file.zig    # exit 0 clean, 1 something blocking, 3 unreadable
 ```
 
 It prints the findings in the same grouped form the hook feeds Claude, and records them to the
-same book.
+same book. Wiring it into another tool automatically is up to you for now.
 
 ### Day to day
 
