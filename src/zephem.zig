@@ -15,6 +15,7 @@
 //! the subcommand's action, so `zephem std --help` performs a full map regeneration and
 //! `zephem depth --help` starts a multi-minute sweep (ledger B9).
 const std = @import("std");
+const builtin = @import("builtin");
 const vars = @import("vars.zig");
 
 /// Column indices in `lookup.tsv`. Documented contract, mirrored from zephem's src/lookup.zig.
@@ -56,11 +57,79 @@ pub fn lookupPath(c: vars.Ctx) ![]u8 {
     return std.fs.path.join(c.gpa, &.{ home, ".config", "zephem", "lookup.tsv" });
 }
 
+/// How a zephem checkout was found — reported by `zcanon doctor` so a wrong guess is visible.
+pub const Source = enum {
+    env,
+    recorded,
+    sibling,
+
+    pub fn describe(s: Source) []const u8 {
+        return switch (s) {
+            .env => "from $ZEPHEM_HOME",
+            .recorded => "recorded by zcanon setup",
+            .sibling => "found next to zcanon",
+        };
+    }
+};
+
+pub const Home = struct { path: []const u8, source: Source };
+
+/// A directory is a zephem checkout if it carries the committed map's PINNED stamp.
+pub fn isHome(c: vars.Ctx, dir: []const u8) bool {
+    const pinned = std.fs.path.join(c.gpa, &.{ dir, "data", "std", "PINNED" }) catch return false;
+    defer c.gpa.free(pinned);
+    std.Io.Dir.cwd().access(c.io, pinned, .{}) catch return false;
+    return true;
+}
+
+/// Find the zephem checkout: `$ZEPHEM_HOME`, else the one `zcanon setup` recorded, else a
+/// `zephem` directory beside the zcanon checkout this binary was built in. Each candidate must
+/// actually be a zephem checkout; an env var or record pointing somewhere else is reported as
+/// not found rather than trusted. Before this existed, an unset `$ZEPHEM_HOME` silently turned
+/// the staleness guard off.
+pub fn locateHome(c: vars.Ctx) ?Home {
+    if (c.get("ZEPHEM_HOME")) |h| {
+        return if (isHome(c, h)) .{ .path = h, .source = .env } else null;
+    }
+    if (recorded(c)) |h| {
+        if (isHome(c, h)) return .{ .path = h, .source = .recorded };
+    }
+    if (sibling(c)) |h| {
+        if (isHome(c, h)) return .{ .path = h, .source = .sibling };
+    }
+    return null;
+}
+
+/// The location `zcanon setup` recorded, if any.
+pub fn recorded(c: vars.Ctx) ?[]const u8 {
+    const path = vars.zephemRecordPath(c) catch return null;
+    defer c.gpa.free(path);
+    const text = std.Io.Dir.cwd().readFileAlloc(c.io, path, c.gpa, .limited(4096)) catch return null;
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    return if (trimmed.len == 0) null else trimmed;
+}
+
+/// `<parent>/zephem` for a binary at `<parent>/zcanon/zig-out/bin/zcanon`.
+fn sibling(c: vars.Ctx) ?[]const u8 {
+    const self = vars.selfExe(c) catch return null;
+    const bin = std.fs.path.dirname(self) orelse return null;
+    const out = std.fs.path.dirname(bin) orelse return null;
+    const repo = std.fs.path.dirname(out) orelse return null;
+    const parent = std.fs.path.dirname(repo) orelse return null;
+    return std.fs.path.join(c.gpa, &.{ parent, "zephem" }) catch null;
+}
+
+/// The zephem binary inside a checkout.
+pub fn exePath(c: vars.Ctx, home: []const u8) ![]u8 {
+    const name = if (builtin.os.tag == .windows) "zephem.exe" else "zephem";
+    return std.fs.path.join(c.gpa, &.{ home, "zig-out", "bin", name });
+}
+
 /// zephem's dataset directory, for the PINNED stamp.
 pub fn dataDir(c: vars.Ctx) !?[]u8 {
     if (c.get("ZEPHEM_DATA")) |p| return try c.gpa.dupe(u8, p);
-    const home = c.get("ZEPHEM_HOME") orelse return null;
-    return try std.fs.path.join(c.gpa, &.{ home, "data", "std" });
+    const home = locateHome(c) orelse return null;
+    return try std.fs.path.join(c.gpa, &.{ home.path, "data", "std" });
 }
 
 pub const Map = struct {

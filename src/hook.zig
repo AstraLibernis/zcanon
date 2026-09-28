@@ -14,7 +14,7 @@ const book = @import("book.zig");
 pub const MAX_CONTEXT = 9000;
 
 pub const HINT = "\n\n(Confirm current std APIs against the zephem map before writing them: " ++
-    "`$ZEPHEM_HOME/zig-out/bin/zephem look <name>`.)";
+    "`zephem look <name>` — `zcanon doctor` prints where zephem is.)";
 
 pub const Finding = struct {
     rule: []const u8,

@@ -323,3 +323,116 @@ test "cli: argument order is preserved across files" {
     // b was given first, and its finding is on a LATER line — sorting must not reorder files.
     try testing.expect(at_b < at_a);
 }
+
+// ---- setup / doctor / check -------------------------------------------------
+
+const build_options = @import("build_options");
+
+/// setup needs the zephem lookup table; with HOME unset (as in every CLI test) it has to be
+/// told where the table is. No table on this machine → skip, don't fail.
+fn setupEnv(s: *h.Sandbox) ![2][2][]const u8 {
+    if (build_options.zephem_lookup.len == 0) return error.SkipZigTest;
+    std.Io.Dir.cwd().access(s.io, build_options.zephem_lookup, .{}) catch return error.SkipZigTest;
+    return .{
+        .{ "ZEPHEM_LOOKUP", build_options.zephem_lookup },
+        .{ "ZCANON_SKILL", try s.path("skills/zcanon/SKILL.md") },
+    };
+}
+
+test "cli: doctor on a fresh sandbox fails and changes nothing" {
+    var s = try box("doctor-fresh");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+
+    const r = try s.zcanonEnv(&.{"doctor"}, &env);
+    try testing.expectEqual(@as(u8, 1), r.code);
+    try testing.expect(r.outContains("hook not installed"));
+    try testing.expect(r.outContains("Not ready"));
+    try testing.expect(!s.exists("settings.json"));
+    try testing.expect(!s.exists("skills/zcanon/SKILL.md"));
+    try testing.expect(!s.exists("config/zephem-home"));
+}
+
+test "cli: setup installs the hook, records zephem, and proves the hook fires" {
+    var s = try box("setup");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    _ = try s.write("settings.json", "{\"theme\":\"dark\"}");
+
+    const r = try s.zcanonEnv(&.{"setup"}, &env);
+    if (r.code != 0) std.debug.print("setup output:\n{s}\n{s}\n", .{ r.stdout, r.stderr });
+    try testing.expectEqual(@as(u8, 0), r.code);
+    try testing.expect(r.outContains("core rules, zephem map rules and zig ast-check all reported"));
+    try testing.expect(!r.outContains("[FAIL]"));
+
+    // The command is quoted, the user's key survives, zephem is recorded, the skill is in place.
+    const text = try s.read("settings.json");
+    try testing.expect(std.mem.find(u8, text, "\\\"") != null);
+    try testing.expect(std.mem.find(u8, text, "\"theme\"") != null);
+    try testing.expect(s.exists("config/zephem-home"));
+    try testing.expect(s.exists("skills/zcanon/SKILL.md"));
+    // The installed skill carries real paths, not the repo's placeholders.
+    const skill_text = try s.read("skills/zcanon/SKILL.md");
+    try testing.expect(std.mem.find(u8, skill_text, "{{") == null);
+    try testing.expect(std.mem.find(u8, skill_text, "zig-out/bin/zcanon setup") != null);
+    // The live test's probe and its book leave nothing behind.
+    try testing.expect(!s.exists("config/probe"));
+    try testing.expect(!s.exists("config/book.tsv"));
+
+    // Idempotent, and doctor now agrees.
+    const again = try s.zcanonEnv(&.{"setup"}, &env);
+    try testing.expectEqual(@as(u8, 0), again.code);
+    try testing.expect(!again.outContains("[fixed]"));
+    const doc = try s.zcanonEnv(&.{"doctor"}, &env);
+    try testing.expectEqual(@as(u8, 0), doc.code);
+    try testing.expect(doc.outContains("All checks pass"));
+}
+
+test "cli: setup refuses a settings file it cannot parse, and leaves it alone" {
+    var s = try box("setup-badjson");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    const bad = "{\"theme\": \"dark\",";
+    _ = try s.write("settings.json", bad);
+
+    const r = try s.zcanonEnv(&.{"setup"}, &env);
+    try testing.expectEqual(@as(u8, 1), r.code);
+    try testing.expect(r.outContains("is not valid JSON"));
+    try testing.expectEqualStrings(bad, try s.read("settings.json"));
+}
+
+test "cli: setup switches a disabled hook back on; doctor reports it off" {
+    var s = try box("setup-disabled");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    _ = try s.zcanonEnv(&.{"setup"}, &env);
+    _ = try s.zcanon(&.{"disable"});
+
+    const doc = try s.zcanonEnv(&.{"doctor"}, &env);
+    try testing.expectEqual(@as(u8, 1), doc.code);
+    try testing.expect(doc.outContains("switched off"));
+
+    const r = try s.zcanonEnv(&.{"setup"}, &env);
+    try testing.expectEqual(@as(u8, 0), r.code);
+    try testing.expect(r.outContains("switched it back on"));
+    try testing.expect(r.outContains("all reported"));
+    try testing.expect(!s.exists("config/hook.disabled"));
+}
+
+test "cli: check exits 1 on blocking findings, 0 when clean, 3 when unreadable" {
+    var s = try box("check");
+    defer s.deinit();
+    const dirty = try s.write("dirty.zig", "const std = @import(\"std\");\npub fn f() void {\n    const unused = 1;\n}\n");
+    const clean = try s.write("clean.zig", clean_zig);
+
+    const d = try s.zcanon(&.{ "check", dirty });
+    try testing.expectEqual(@as(u8, 1), d.code);
+    try testing.expect(d.outContains("[ast-check]"));
+
+    const c = try s.zcanon(&.{ "check", clean });
+    try testing.expectEqual(@as(u8, 0), c.code);
+    try testing.expect(c.outContains("no findings"));
+
+    const m = try s.zcanon(&.{ "check", try s.path("missing.zig") });
+    try testing.expectEqual(@as(u8, 3), m.code);
+}

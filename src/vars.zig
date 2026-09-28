@@ -29,11 +29,28 @@ pub fn home(c: Ctx) Error![]const u8 {
     return error.HomeNotSet;
 }
 
+/// Claude Code's config directory: `$CLAUDE_CONFIG_DIR` when Claude Code was pointed
+/// elsewhere, else `~/.claude`.
+pub fn claudeDir(c: Ctx) Error![]u8 {
+    if (c.get("CLAUDE_CONFIG_DIR")) |p| return c.gpa.dupe(u8, p);
+    return std.fs.path.join(c.gpa, &.{ try home(c), ".claude" });
+}
+
 /// The Claude Code settings file the hook installs itself into.
 /// `$ZCANON_SETTINGS` overrides, which is what the tests use.
 pub fn settingsPath(c: Ctx) Error![]u8 {
     if (c.get("ZCANON_SETTINGS")) |p| return c.gpa.dupe(u8, p);
-    return std.fs.path.join(c.gpa, &.{ try home(c), ".claude", "settings.json" });
+    const dir = try claudeDir(c);
+    defer c.gpa.free(dir);
+    return std.fs.path.join(c.gpa, &.{ dir, "settings.json" });
+}
+
+/// Where the skill is installed. `$ZCANON_SKILL` overrides, which is what the tests use.
+pub fn skillPath(c: Ctx) Error![]u8 {
+    if (c.get("ZCANON_SKILL")) |p| return c.gpa.dupe(u8, p);
+    const dir = try claudeDir(c);
+    defer c.gpa.free(dir);
+    return std.fs.path.join(c.gpa, &.{ dir, "skills", "zcanon", "SKILL.md" });
 }
 
 /// Local state: the book and the hook's off switch.
@@ -51,6 +68,14 @@ pub fn bookPath(c: Ctx) Error![]u8 {
     return std.fs.path.join(c.gpa, &.{ dir, "book.tsv" });
 }
 
+/// `zcanon setup` records the zephem checkout it found here, so nothing needs
+/// `$ZEPHEM_HOME` set afterwards.
+pub fn zephemRecordPath(c: Ctx) Error![]u8 {
+    const dir = try configDir(c);
+    defer c.gpa.free(dir);
+    return std.fs.path.join(c.gpa, &.{ dir, "zephem-home" });
+}
+
 /// Presence of this file disables the hook without touching settings.json.
 pub fn disableFlagPath(c: Ctx) Error![]u8 {
     const dir = try configDir(c);
@@ -63,4 +88,14 @@ pub fn disableFlagPath(c: Ctx) Error![]u8 {
 /// lives on the Io layer.
 pub fn selfExe(c: Ctx) ![:0]u8 {
     return std.process.executablePathAlloc(c.io, c.gpa);
+}
+
+/// The linter's file name beside zcanon (Windows executables carry `.exe`).
+pub const zsnag_name = if (builtin.os.tag == .windows) "zsnag.exe" else "zsnag";
+
+/// zsnag lives beside the running zcanon binary.
+pub fn zsnagPath(c: Ctx) ![]u8 {
+    const self = try selfExe(c);
+    const bin_dir = std.fs.path.dirname(self) orelse ".";
+    return std.fs.path.join(c.gpa, &.{ bin_dir, zsnag_name });
 }

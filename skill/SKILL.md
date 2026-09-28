@@ -15,16 +15,16 @@ half of the Zig toolkit; the **std-lookup** half lives in the companion **`zephe
 Reach for both when writing Zig:
 
 - **`zephem`** (companion skill) — *before* you write a std call, look the API up in
-  zephem's complete, verified std map instead of recalling it from memory
-  (`$ZEPHEM_HOME/zig-out/bin/zephem look <terms>` for keyword search, `… map doc <path>`
-  for one exact decl). Zig's std churns fast; don't guess signatures.
+  zephem's complete, verified std map instead of recalling it from memory:
+  `{{ZEPHEM}} look <terms>` for keyword search, `{{ZEPHEM}} map find <name>` to see
+  whether a name exists and what replaced it, `{{ZEPHEM}} map doc <path>` for one exact decl.
+  Zig's std churns fast; don't guess signatures. If `map find` has no hit for a path you were
+  about to use, that API does not exist in this Zig. Don't write it.
 - **`zcanon`** (this skill) — *while and after* you write, catch the known traps.
 
-Two binaries, both under `zig-out/bin/` and both self-locating, so they work wherever zcanon
-is cloned: **`zsnag`** (the linter) and **`zcanon`** (the hook, its installer, and the book
-reader). No `nu`, no `sqlite3`. The commands below refer to the repo as **`$ZCANON_HOME`** —
-set it once to your clone (e.g. `export ZCANON_HOME=/path/to/zcanon`) so they run verbatim
-from any directory.
+This copy of the skill was installed by `zcanon setup`, which filled in the real paths above
+and below. Two binaries: **`zsnag`** (the linter) and **`zcanon`** (the hook, its setup and
+the book reader). No `nu`, no `sqlite3`, no environment variables to set.
 
 ## After you edit a .zig file
 
@@ -32,33 +32,39 @@ The PostToolUse hook feeds back, on every `.zig` edit:
 - `zig ast-check` — real syntax/compile errors
 - `zsnag` — known LLM footguns (the list below)
 
-**It only runs once installed** — `$ZCANON_HOME/zig-out/bin/zcanon install` writes the hook
-into `~/.claude/settings.json` (backing it up first, and touching nothing but its own entry).
-
-Verify with `zcanon status`, which prints four things — the hook is only working if all four
-are right:
-
-```
-installed in settings: true
-runtime state: enabled
-zsnag binary: …/zig-out/bin/zsnag          ← flagged MISSING if absent
-book: ~/.config/zcanon/book.tsv
-```
-
-A fresh clone has neither the hook installed nor the binaries built (`zig-out/` is gitignored) —
-run `zig build` first. If zsnag is missing the hook now says so in-band rather than checking
-nothing silently, but **do not read "no findings" as "no problems"** until `status` is clean.
+It is installed and verified by one command, `{{ZCANON}} setup`, which checks zephem, checks
+that it can hook into Claude Code, installs the hook, then runs it on a probe file to prove the
+core rules, the zephem map rules and `zig ast-check` all fire. If findings stop appearing, run
+`{{ZCANON}} doctor`: the same checks, changing nothing, each failure with its fix.
+**Do not read "no findings" as "no problems"** unless `doctor` passes.
 
 Read the findings and fix them before moving on. To check a file by hand at any time:
-`$ZCANON_HOME/zig-out/bin/zsnag <file>`.
+`{{ZCANON}} check <file.zig>` (the hook's exact checks; exit 1 = something blocking) or
+`{{ZSNAG}} <file.zig>` (the linter alone).
 
 Findings that survive are recorded to the book (`~/.config/zcanon/book.tsv`), so `hits` counts
 real recurrences — each save re-scans the whole file and anything no longer present is pruned.
-Read it with `zcanon book` (by rule), `zcanon book files`, `zcanon book recent [N]`, or
-`zcanon book R0NN` for one rule's detail.
+Read it with `{{ZCANON}} book` (by rule), `book files`, `book recent [N]`, or `book R0NN`.
 
-Off switch: `zcanon disable` / `zcanon enable` toggle at runtime without touching settings.json.
-Full removal: `zcanon uninstall`.
+Off switch: `{{ZCANON}} disable` / `enable` toggle at runtime without touching settings.json.
+Full removal: `{{ZCANON}} uninstall`.
+
+## Workflow
+
+1. `map find` every std symbol you intend to use
+2. Write the file
+3. Read the hook's findings (or run `check`) and fix them; `zig ast-check` must be clean
+4. Compile and run the tests before claiming the code works
+
+## Modern Zig 0.16 shapes your training data probably gets wrong
+
+    var list: std.ArrayList(u8) = .empty;   // NOT ArrayList(u8).init(gpa)
+    defer list.deinit(gpa);                  // allocator passed to deinit
+    try list.append(gpa, 'x');               // allocator passed to append
+    const v: u8 = @intCast(big);             // ONE argument, not @intCast(u8, big)
+    std.Io.Dir.cwd()                         // NOT std.fs.cwd(); file calls take an `io`
+
+Confirm any other shape with `map find` before writing it.
 
 ## Mistakes to avoid (zsnag checks these)
 
@@ -104,3 +110,14 @@ It catches known traps and runs the compiler's syntax check on every edit. It do
 look up std APIs (that's the `zephem` skill), check your logic, or guarantee correctness.
 The compiler and tests are the real safety net — compile and run tests (use
 `Debug`/`ReleaseSafe` for runtime checks) before claiming code works.
+
+## Known blind spots
+
+- **R008 does not yet recognise Zig 0.16 initialisation.** It sees `openFile`/`createFile` and
+  the old `Type.init(...)` call form, but not `var x: T = .empty` or `= .init(...)`, so a leaked
+  `ArrayList` built the modern way passes silently. Check your own `defer ... deinit` pairs.
+- **R006 and R008 are AST rules: they do not fire on a file that fails to parse.** When writing
+  fixtures, keep removed-keyword cases (R001/R002/R003, which make a file unparseable) in a
+  separate file from AST-rule cases.
+- `zig ast-check` is syntax-level: it accepts calls to APIs that no longer exist. For code in a
+  `test` block the real bar is `zig test --test-no-exec`.

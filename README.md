@@ -44,33 +44,67 @@ real recurrences rather than repeated saves.
 
 ## Install
 
+You need [Zig 0.16.0](https://ziglang.org/download/) on your PATH, and the companion
+[zephem](https://github.com/AstraLibernis/zephem) cloned **next to** zcanon:
+
 ```sh
+git clone https://github.com/AstraLibernis/zephem.git
 git clone https://github.com/AstraLibernis/zcanon.git
 cd zcanon
-zig build                    # builds zig-out/bin/{zsnag,zcanon}
-zig build test               # unit tests + the end-to-end CLI tests
-zig build test-cli           # just the CLI tests (drives the real binaries)
+zig build
+zig-out/bin/zcanon setup
+```
 
-# 1. the linter works immediately (reads the file you give it):
-zig-out/bin/zsnag yourfile.zig
+`zcanon setup` is the whole install. It works in three steps and stops at the first problem,
+printing the exact command that fixes it:
 
-# 2. the auto-checker hook (reversible — see below):
-zig-out/bin/zcanon install   # adds a PostToolUse hook to ~/.claude/settings.json (backs up first)
-zig-out/bin/zcanon status    # installed? enabled? zsnag present? book path?
+1. **zephem** — finds your zephem checkout (beside zcanon, or `$ZEPHEM_HOME`) and records where
+   it is, so nothing needs an environment variable afterwards; builds zephem if needed; checks
+   its std map is pinned to the Zig on your PATH; bakes and loads the lookup table.
+2. **Claude Code** — checks zsnag was built, and that Claude Code's `settings.json` (in
+   `~/.claude`, or `$CLAUDE_CONFIG_DIR`) is valid JSON in a writable directory. zcanon never
+   rewrites a settings file it cannot parse.
+3. **The hook** — installs it (backing up `settings.json` first, touching nothing but its own
+   entry), switches it on, then **proves it works**: it reads the command back from
+   `settings.json`, runs it through a shell exactly as Claude Code will, on a probe file with
+   one known problem per check. It only reports success if the core rules, the zephem map
+   rules and `zig ast-check` all fire. Finally it installs the skill with this machine's real
+   paths filled in.
 
-# 3. the book — read back the real mistakes the hook caught:
-zig-out/bin/zcanon book              # table of contents, ranked by frequency
+Run it again at any time; it only changes what is wrong. `zcanon doctor` runs the same checks
+and changes nothing, so it is the first thing to try if findings ever stop appearing.
+
+### Other coding agents
+
+The hook speaks Claude Code's PostToolUse protocol. Any other agent that can run a command
+after it edits a file can get the same checks with:
+
+```sh
+zig-out/bin/zcanon check path/to/file.zig    # exit 0 clean, 1 something blocking, 3 unreadable
+```
+
+It prints the findings in the same grouped form the hook feeds Claude, and records them to the
+same book.
+
+### Day to day
+
+```sh
+zig-out/bin/zcanon book              # the real mistakes the hook caught, ranked by frequency
 zig-out/bin/zcanon book recent 20    # newest findings
 zig-out/bin/zcanon book files        # per-file roll-up
 zig-out/bin/zcanon book R004         # detail for one rule
+zig-out/bin/zsnag yourfile.zig       # the linter alone
+zig build test                       # unit tests + the end-to-end CLI tests
 ```
 
-For **std lookup/discovery**, install the companion [zephem](https://github.com/AstraLibernis/zephem)
-and its skill — that's where the std map lives, queried with `zephem look` / `zephem map`.
+`zcanon disable` / `zcanon enable` switch the hook off and on without touching settings;
+`zcanon uninstall` removes only zcanon's entry; `zcanon prune` drops findings for files that no
+longer exist.
 
-The hook is fully reversible: `zcanon disable` / `zcanon enable` toggle it with no settings
-change; `zcanon uninstall` removes only our entry and leaves the rest of your settings intact.
-`zcanon prune` drops findings for files that no longer exist.
+**Windows:** the same commands work in PowerShell with `zig-out\bin\zcanon.exe`. Claude Code
+runs hooks through Git Bash there, so the installed command uses forward slashes and quotes
+its path. This build is cross-compiled and unit-tested, but has not yet been run on a real
+Windows machine; `zcanon doctor` is the first thing to try if anything misbehaves.
 
 ## What it does and does not do
 

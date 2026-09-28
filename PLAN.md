@@ -48,9 +48,8 @@ trap that kills any tool that depends on discipline). The skill is therefore the
 that turns "a few scripts on disk" into "install once, fewer Zig mistakes everywhere." It
 cross-references the companion **zephem** skill, which owns the std-lookup half.
 
-Install paths for the skill (pick one):
-- copy/symlink `skill/SKILL.md` into `~/.claude/skills/zcanon/SKILL.md` (global), or
-- reference it from a project's `CLAUDE.md`.
+`zcanon setup` installs it to `~/.claude/skills/zcanon/SKILL.md` with this machine's real
+paths filled in, and `zcanon doctor` reports when the installed copy has drifted from the repo's.
 
 ## Roadmap
 

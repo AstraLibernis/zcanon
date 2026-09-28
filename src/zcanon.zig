@@ -5,19 +5,21 @@
 //! reader over the book. Replaces `nu/zhook.nu` + `nu/zbook.nu`; no `nu` and no `sqlite3`
 //! on the hook path.
 const std = @import("std");
-const builtin = @import("builtin");
 const vars = @import("vars.zig");
 const settings = @import("settings.zig");
 const hook = @import("hook.zig");
 const book = @import("book.zig");
 const report = @import("report.zig");
-
-/// The linter's file name beside this binary (Windows executables carry `.exe`).
-const zsnag_name = if (builtin.os.tag == .windows) "zsnag.exe" else "zsnag";
+const tier = @import("tier.zig");
+const setup = @import("setup.zig");
 
 const usage =
     \\zcanon <command> [args]
     \\
+    \\  setup              check zephem + Claude Code, install the hook, then prove it works
+    \\  doctor             the same checks as setup, changing nothing
+    \\  check <file>...    run the checks on files (for agents other than Claude Code);
+    \\                     exit 1 = something blocking
     \\  hook               run as a PostToolUse hook (reads the payload on stdin)
     \\  install            add the hook to Claude Code's settings.json (backs up first)
     \\  uninstall          remove ONLY our entry; leave other settings intact
@@ -42,6 +44,9 @@ pub fn main(init: std.process.Init) !void {
     const cmd = args[1];
     const rest = args[2..];
 
+    if (std.mem.eql(u8, cmd, "setup")) return setup.run(c, .setup, rest);
+    if (std.mem.eql(u8, cmd, "doctor")) return setup.run(c, .doctor, rest);
+    if (std.mem.eql(u8, cmd, "check")) return runCheck(c, rest);
     if (std.mem.eql(u8, cmd, "hook")) return runHook(c);
     if (std.mem.eql(u8, cmd, "install")) return runInstall(c);
     if (std.mem.eql(u8, cmd, "uninstall")) return runUninstall(c);
@@ -85,15 +90,34 @@ fn runHook(c: vars.Ctx) !void {
 
     const path = (hook.filePathFromPayload(c.gpa, payload) catch return) orelse return;
     if (!std.mem.endsWith(u8, path, ".zig")) return;
-    const src = std.Io.Dir.cwd().readFileAlloc(c.io, path, c.gpa, .unlimited) catch return;
+    const a = (try analyze(c, path)) orelse return;
+
+    const body = (try hook.renderContext(c.gpa, a.base, path, a.findings)) orelse "";
+    const ctx = (try hook.compose(c.gpa, body, &.{ a.notice, a.book_notice })) orelse return;
+
+    var out_buf: [1 << 16]u8 = undefined;
+    var w = stdout(c, &out_buf);
+    try w.interface.writeAll(try hook.renderResponse(c.gpa, ctx));
+    try w.interface.flush();
+}
+
+const Analysis = struct {
+    base: []const u8,
+    findings: []hook.Finding,
+    notice: []const u8,
+    book_notice: []const u8,
+};
+
+/// The check itself, shared by the Claude Code hook and `zcanon check`: zsnag + `zig ast-check`
+/// on one file, deduped, sorted, and recorded to the book. Null when the file can't be read.
+fn analyze(c: vars.Ctx, path: []const u8) !?Analysis {
+    const src = std.Io.Dir.cwd().readFileAlloc(c.io, path, c.gpa, .unlimited) catch return null;
 
     var findings: std.ArrayList(hook.Finding) = .empty;
 
     // zsnag lives beside this binary. If it is missing we say so loudly in-band rather than
     // skipping silently — "no findings" must never be indistinguishable from "never checked".
-    const self = try vars.selfExe(c);
-    const bin_dir = std.fs.path.dirname(self) orelse ".";
-    const zsnag_path = try std.fs.path.join(c.gpa, &.{ bin_dir, zsnag_name });
+    const zsnag_path = try vars.zsnagPath(c);
 
     // Which rule groups actually ran. zsnag REPORTS this in its status record rather than
     // us inferring it from an exit code — inference is what let a failed zephem map load look
@@ -139,7 +163,6 @@ fn runHook(c: vars.Ctx) !void {
     // original — otherwise a duplicate renders twice and double-counts `hits`.
     const deduped = try hook.dedup(c.gpa, src, findings.items);
     hook.sortFindings(deduped);
-    const base = std.fs.path.basename(path);
 
     // The book is best-effort. A write failure (or error.NegativeTimestamp from a bad clock)
     // must not propagate: a non-zero exit surfaces as a hook ERROR with no findings, which is
@@ -153,13 +176,42 @@ fn runHook(c: vars.Ctx) !void {
         ) catch "";
     };
 
-    const body = (try hook.renderContext(c.gpa, base, path, deduped)) orelse "";
-    const ctx = (try hook.compose(c.gpa, body, &.{ notice, book_notice })) orelse return;
+    return .{
+        .base = std.fs.path.basename(path),
+        .findings = deduped,
+        .notice = notice,
+        .book_notice = book_notice,
+    };
+}
 
-    var out_buf: [1 << 16]u8 = undefined;
-    var w = stdout(c, &out_buf);
-    try w.interface.writeAll(try hook.renderResponse(c.gpa, ctx));
+// ---- check: the same analysis, for any agent ------------------------------
+// Agents without Claude Code's hook system can run this after each edit. Findings go to
+// stdout in the same grouped form the hook feeds Claude; exit 1 means something BLOCKING.
+
+fn runCheck(c: vars.Ctx, files: []const []const u8) !void {
+    if (files.len == 0) return fail(c, "usage: zcanon check <file.zig>...\n");
+    var buf: [1 << 16]u8 = undefined;
+    var w = stdout(c, &buf);
+    var blocking = false;
+    var unreadable = false;
+    for (files) |path| {
+        const a = (try analyze(c, path)) orelse {
+            try w.interface.print("{s}: cannot read file\n", .{path});
+            unreadable = true;
+            continue;
+        };
+        for (a.findings) |f| {
+            if (tier.classify(f.severity, path) == .blocking) blocking = true;
+        }
+        if (try hook.renderContext(c.gpa, a.base, path, a.findings)) |body| {
+            try w.interface.print("{s}{s}{s}\n", .{ body, a.notice, a.book_notice });
+        } else {
+            try w.interface.print("{s}: no findings{s}{s}\n", .{ a.base, a.notice, a.book_notice });
+        }
+    }
     try w.interface.flush();
+    if (unreadable) std.process.exit(3);
+    if (blocking) std.process.exit(1);
 }
 
 fn recordToBook(
@@ -252,9 +304,7 @@ fn runStatus(c: vars.Ctx) !void {
     const flag = try vars.disableFlagPath(c);
     const enabled = !exists(c, flag);
 
-    const self = try vars.selfExe(c);
-    const bin_dir = std.fs.path.dirname(self) orelse ".";
-    const zsnag_path = try std.fs.path.join(c.gpa, &.{ bin_dir, zsnag_name });
+    const zsnag_path = try vars.zsnagPath(c);
     const book_path = try vars.bookPath(c);
 
     var buf: [2048]u8 = undefined;

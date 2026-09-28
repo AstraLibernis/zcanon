@@ -18,12 +18,47 @@ pub const TIMEOUT_SECS = 30;
 const Value = std.json.Value;
 
 /// The command string written into settings.json, marker included.
+///
+/// The path is double-quoted: Claude Code runs the command through a shell, and an unquoted
+/// path with a space in it (`C:/Users/Jane Doe/...`, `~/My Projects/...`) splits into two
+/// words and the hook never runs.
 pub fn command(gpa: std.mem.Allocator, exe_path: []const u8) ![]u8 {
-    const cmd = try std.fmt.allocPrint(gpa, "{s} hook  # {s}", .{ exe_path, MARKER });
-    // Windows: Claude Code runs hook commands through Git Bash, where an unquoted
-    // `C:\Users\...` loses every backslash. Forward slashes work in bash, cmd and PowerShell.
-    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, cmd[0..exe_path.len], '\\', '/');
+    const cmd = try std.fmt.allocPrint(gpa, "\"{s}\" hook  # {s}", .{ exe_path, MARKER });
+    // Windows: Claude Code runs hook commands through Git Bash, where `C:\Users\...` loses
+    // every backslash even inside double quotes. Forward slashes work in bash, cmd and PowerShell.
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, cmd[1 .. exe_path.len + 1], '\\', '/');
     return cmd;
+}
+
+/// The executable an installed command runs: the quoted path, or (for entries written before
+/// quoting) everything before ` hook`. Null for a command that isn't one of ours.
+pub fn exeFromCommand(cmd: []const u8) ?[]const u8 {
+    if (std.mem.find(u8, cmd, MARKER) == null) return null;
+    if (cmd.len > 0 and cmd[0] == '"') {
+        const close = std.mem.findScalarPos(u8, cmd, 1, '"') orelse return null;
+        return cmd[1..close];
+    }
+    const at = std.mem.find(u8, cmd, " hook") orelse return null;
+    return cmd[0..at];
+}
+
+/// The command string of our installed entry, if there is one.
+pub fn ourCommand(gpa: std.mem.Allocator, root: *Value) ?[]const u8 {
+    const arr = (postToolUse(gpa, root, false) catch return null) orelse return null;
+    for (arr.items) |e| {
+        if (!isOurs(e)) continue;
+        for (e.object.get("hooks").?.array.items) |h| {
+            const ho = switch (h) {
+                .object => |o| o,
+                else => continue,
+            };
+            switch (ho.get("command") orelse continue) {
+                .string => |s| if (std.mem.find(u8, s, MARKER) != null) return s,
+                else => {},
+            }
+        }
+    }
+    return null;
 }
 
 fn isOurs(entry: Value) bool {

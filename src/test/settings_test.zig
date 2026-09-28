@@ -158,14 +158,14 @@ test "command carries the marker" {
     const cmd = try settings.command(testing.allocator, "/opt/zcanon");
     defer testing.allocator.free(cmd);
     try testing.expect(std.mem.find(u8, cmd, settings.MARKER) != null);
-    try testing.expect(std.mem.startsWith(u8, cmd, "/opt/zcanon hook"));
+    try testing.expect(std.mem.startsWith(u8, cmd, "\"/opt/zcanon\" hook"));
 }
 
 test "command uses forward slashes on Windows, where hooks run through Git Bash" {
     if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
     const cmd = try settings.command(testing.allocator, "C:\\Users\\me\\zcanon.exe");
     defer testing.allocator.free(cmd);
-    try testing.expect(std.mem.startsWith(u8, cmd, "C:/Users/me/zcanon.exe hook"));
+    try testing.expect(std.mem.startsWith(u8, cmd, "\"C:/Users/me/zcanon.exe\" hook"));
 }
 
 test "render round-trips through a re-parse" {
@@ -276,4 +276,27 @@ test "a non-object settings root is refused rather than overwritten" {
         error.SettingsNotAnObject,
         settings.addOurs(p.gpa(), &p.value, "/bin/zcanon hook"),
     );
+}
+
+test "exeFromCommand reads quoted, legacy unquoted, and rejects foreign commands" {
+    try testing.expectEqualStrings("/a b/zcanon", settings.exeFromCommand("\"/a b/zcanon\" hook  # zcanon-zig-hook").?);
+    try testing.expectEqualStrings("/bin/zcanon", settings.exeFromCommand("/bin/zcanon hook  # zcanon-zig-hook").?);
+    try testing.expect(settings.exeFromCommand("other-tool --flag") == null);
+}
+
+test "command quotes the path so a space cannot split it" {
+    const cmd = try settings.command(testing.allocator, "/home/u/My Projects/zcanon");
+    defer testing.allocator.free(cmd);
+    try testing.expect(std.mem.startsWith(u8, cmd, "\"/home/u/My Projects/zcanon\" hook"));
+    try testing.expectEqualStrings("/home/u/My Projects/zcanon", settings.exeFromCommand(cmd).?);
+}
+
+test "ourCommand finds our entry among foreign ones" {
+    var p = try parse(
+        \\{"hooks":{"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"other"}]}]}}
+    );
+    defer p.deinit();
+    try testing.expect(settings.ourCommand(p.gpa(), &p.value) == null);
+    try settings.addOurs(p.gpa(), &p.value, "\"/x/zcanon\" hook  # zcanon-zig-hook");
+    try testing.expectEqualStrings("\"/x/zcanon\" hook  # zcanon-zig-hook", settings.ourCommand(p.gpa(), &p.value).?);
 }

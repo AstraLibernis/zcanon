@@ -108,7 +108,16 @@ pub const Sandbox = struct {
         return s.runTool("zsnag", args, null);
     }
 
+    /// zcanon with extra environment on top of the sandbox's (name, value pairs).
+    pub fn zcanonEnv(s: *Sandbox, args: []const []const u8, extra: []const [2][]const u8) !Result {
+        return s.runToolEnv("zcanon", args, null, extra);
+    }
+
     fn runTool(s: *Sandbox, tool: []const u8, args: []const []const u8, stdin: ?[]const u8) !Result {
+        return s.runToolEnv(tool, args, stdin, &.{});
+    }
+
+    fn runToolEnv(s: *Sandbox, tool: []const u8, args: []const []const u8, stdin: ?[]const u8, extra: []const [2][]const u8) !Result {
         const a = s.gpa();
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.append(a, try std.fs.path.join(a, &.{ s.bin, tool }));
@@ -125,6 +134,7 @@ pub const Sandbox = struct {
         // hook's `zig ast-check` never starts.
         if (builtin.os.tag == .windows) try env.put("PATHEXT", ".COM;.EXE;.BAT;.CMD");
         if (build_options.zephem_home.len > 0) try env.put("ZEPHEM_HOME", build_options.zephem_home);
+        for (extra) |kv| try env.put(kv[0], kv[1]);
         // HOME is deliberately absent: if a path ever falls back to it, these tests fail
         // loudly rather than quietly writing to the real home directory.
 

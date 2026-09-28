@@ -12,3 +12,4 @@ pub const hook = @import("hook.zig");
 pub const report = @import("report.zig");
 pub const snag = @import("snag.zig");
 pub const zephem = @import("zephem.zig");
+pub const setup = @import("setup.zig");
