@@ -15,9 +15,9 @@ zcanon keeps you from the mistakes an LLM makes in Zig, in two halves:
 
 - **Before** you write a std call, look it up in the **zephem map**, a complete, verified
   snapshot of this Zig's std, instead of recalling it from memory:
-  `{{ZEPHEM}} look <terms>` for keyword search, `{{ZEPHEM}} map find <name>` to see
-  whether a name exists and what replaced it, `{{ZEPHEM}} map doc <path>` for one exact decl,
-  `{{ZEPHEM}} map show <path>` for a whole module or type.
+  `/home/astralibernis/repos/zephem/zig-out/bin/zephem look <terms>` for keyword search, `/home/astralibernis/repos/zephem/zig-out/bin/zephem map find <name>` to see
+  whether a name exists and what replaced it, `/home/astralibernis/repos/zephem/zig-out/bin/zephem map doc <path>` for one exact decl,
+  `/home/astralibernis/repos/zephem/zig-out/bin/zephem map show <path>` for a whole module or type.
   Zig's std churns fast; don't guess signatures. If `map find` has no hit for a path you were
   about to use, that API does not exist in this Zig. Don't write it.
   - Exit codes: **0** found · **1** no match (stderr may suggest the path you meant) · **2**
@@ -26,8 +26,8 @@ zcanon keeps you from the mistakes an LLM makes in Zig, in two halves:
   - Thin names are followed: `map doc std.ArrayList.append` resolves to
     `std.array_list.Aligned().append`, and hits list their other public names on a `≡` line.
   - `[priv]` hits are private decls, real but not callable at that path from outside their file.
-  - Builtins are in the map too: `{{ZEPHEM}} map doc @intCast` (signature, doc, langref example).
-  - Third-party packages: if the project has dependencies, run `{{ZEPHEM}} deps <project>` once
+  - Builtins are in the map too: `/home/astralibernis/repos/zephem/zig-out/bin/zephem map doc @intCast` (signature, doc, langref example).
+  - Third-party packages: if the project has dependencies, run `/home/astralibernis/repos/zephem/zig-out/bin/zephem deps <project>` once
     (after `zig build --fetch`); then `look`/`map` answer for them too (`map doc clap.parse`).
   - A multi-word `look` that no single decl matches prints the best hits per term on stderr —
     compose the answer from those (`print stdout` → `std.Io.File.stdout` + `Writer.print`).
@@ -47,7 +47,7 @@ file modified since the previous tool call, under the working directory and any 
 
 It reports in a **short view**: a tally line, one row per blocking (`▲`) or caution (`⚠`)
 finding, and the advisory tiers collapsed to rule + line numbers. For every message, run
-`{{ZCANON}} check --full <file.zig>`; `{{ZCANON}} view full` switches the hook itself to the full
+`/home/astralibernis/repos/zcanon/zig-out/bin/zcanon check --full <file.zig>`; `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon view full` switches the hook itself to the full
 layout (`view short` switches back).
 
 **Semantic errors (types, calls, fields) come from a background compiler.** The hook starts a
@@ -55,25 +55,25 @@ per-project background process on the first `.zig` edit. It keeps Zig's incremen
 running (`zig build check --watch -fincremental`), and every hook reports the latest result as
 `▲ [compile] path:line:col  message`. The hook never waits for the compiler, so an edit's own
 errors usually arrive with the *next* edit, and a result that predates the edit says so. The
-process exits after 30 idle minutes. `{{ZCANON}} daemon status` / `daemon stop` inspect or stop it.
+process exits after 30 idle minutes. `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon daemon status` / `daemon stop` inspect or stop it.
 - Any project with a build.zig is covered, with nothing to set up. zcanon uses the project's own
   `check` step when it has one. Otherwise it writes its own build file under
   `~/.config/zcanon/wrap/`, which loads the project as a dependency; the project's build.zig
   is only read. A project with no build.zig gets the syntax and footgun checks only.
 - It checks for the host OS. Code built only for another OS (a Windows GUI checked on Linux) is
-  not analysed unless that target is added: `{{ZCANON}} targets <project> x86_64-windows`.
+  not analysed unless that target is added: `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon targets <project> x86_64-windows`.
 - `zig build check` only analyses code reachable from the project's artifacts and tests; an
   unused function is not type-checked until something calls it.
 
-It is installed and verified by one command, `{{ZCANON}} setup`, which checks zephem, checks
+It is installed and verified by one command, `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon setup`, which checks zephem, checks
 that it can hook into Claude Code, installs the hook, then runs it on a probe file to prove the
 core rules, the zephem map rules and `zig ast-check` all fire. If findings stop appearing, run
-`{{ZCANON}} doctor`: the same checks, changing nothing, each failure with its fix.
+`/home/astralibernis/repos/zcanon/zig-out/bin/zcanon doctor`: the same checks, changing nothing, each failure with its fix.
 **Do not read "no findings" as "no problems"** unless `doctor` passes.
 
 Read the findings and fix them before moving on. To check a file by hand at any time:
-`{{ZCANON}} check [--full] <file.zig>` (the hook's exact checks; exit 1 = something blocking) or
-`{{ZSNAG}} <file.zig>` (the linter alone).
+`/home/astralibernis/repos/zcanon/zig-out/bin/zcanon check [--full] <file.zig>` (the hook's exact checks; exit 1 = something blocking) or
+`/home/astralibernis/repos/zcanon/zig-out/bin/zsnag <file.zig>` (the linter alone).
 
 The first time zcanon sees a file, what is already in it is its baseline: tracked, not counted
 as a mistake, except lines the edit itself wrote. After that, every mistake is recorded in the book (`~/.config/zcanon/book.tsv`): one line per mistake
@@ -81,11 +81,11 @@ as a mistake, except lines the edit itself wrote. After that, every mistake is r
 first and last, and where it last happened (`path:line`). Making it again counts +1; fixing it
 never removes the line. A finding still in the file on the next save is not counted again. A
 mistake made 5 times goes into the bug report (`bugs.md` beside the book), which is never
-pruned. Read them with `{{ZCANON}} book` (most frequent first), `book rules`, `book recent [N]`,
-`book open` (findings in the code right now), `book R0NN`, and `{{ZCANON}} bugs`.
+pruned. Read them with `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon book` (most frequent first), `book rules`, `book recent [N]`,
+`book open` (findings in the code right now), `book R0NN`, and `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon bugs`.
 
-Off switch: `{{ZCANON}} disable` / `enable` toggle at runtime without touching settings.json.
-Full removal: `{{ZCANON}} uninstall`.
+Off switch: `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon disable` / `enable` toggle at runtime without touching settings.json.
+Full removal: `/home/astralibernis/repos/zcanon/zig-out/bin/zcanon uninstall`.
 
 ## Workflow
 
@@ -132,12 +132,14 @@ go stale the way a hardcoded "use X instead" does:
   ``std.mem.indexOf` is deprecated — the map says: use `find`.``
 - **R012** — the argument count disagrees with the map's signature, which is printed with the
   finding so you can see the real parameter list.
-- **R013** — a fully-qualified `std.*` path with no map entry: it may not exist. Advisory,
-  because the resolver is deliberately conservative.
+- **R013** — a fully-qualified `std.*` path with no map entry: it may not exist (a removed
+  API like `std.fs.cwd` or `std.io.getStdOut`, or an invented one). On by default, at
+  advisory severity because the resolver is deliberately conservative. Treat it as "look this
+  up in the map before trusting it".
 
 They run whenever zephem's lookup table is present. If it is missing, the hook and `check` say
 so in their output (zsnag on stderr) and the other ten rules still run — they never silently
-drop them. zsnag's `--no-map` disables them.
+drop them. zsnag's `--no-map` disables all three; `--no-check-existence` disables R013 alone.
 
 Two limits worth knowing, so you read the output correctly: the resolver stops at the first
 call, so `std.Io.Dir.cwd().readFileAlloc(…)` is checked as `std.Io.Dir.cwd` only (a method on

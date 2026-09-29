@@ -118,6 +118,11 @@ pub const Sandbox = struct {
         return s.runTool("zsnag", args, null);
     }
 
+    /// zsnag with extra environment on top of the sandbox's (name, value pairs).
+    pub fn zsnagEnv(s: *Sandbox, args: []const []const u8, extra: []const [2][]const u8) !Result {
+        return s.runToolEnv("zsnag", args, null, extra);
+    }
+
     /// zcanon with extra environment on top of the sandbox's (name, value pairs).
     pub fn zcanonEnv(s: *Sandbox, args: []const []const u8, extra: []const [2][]const u8) !Result {
         return s.runToolEnv("zcanon", args, null, extra);

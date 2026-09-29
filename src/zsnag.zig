@@ -17,12 +17,12 @@ const zephem = @import("zephem.zig");
 const vars = @import("vars.zig");
 
 const usage =
-    \\usage: zsnag [--json] [--no-map] [--check-existence] [--list-rules] file.zig ...
+    \\usage: zsnag [--json] [--no-map] [--no-check-existence] [--list-rules] file.zig ...
     \\
-    \\  --json            one JSON object per finding (JSONL)
-    \\  --no-map          skip the zephem-backed rules (R011 deprecated, R012 arity)
-    \\  --check-existence enable R013: flag a std path with no map entry (opt-in)
-    \\  --list-rules      print the rule registry
+    \\  --json                one JSON object per finding (JSONL)
+    \\  --no-map              skip the zephem-backed rules (R011 deprecated, R012 arity, R013 unknown)
+    \\  --no-check-existence  skip R013 only (a std path with no map entry; advisory, on by default)
+    \\  --list-rules          print the rule registry
     \\
 ;
 
@@ -36,7 +36,7 @@ pub fn main(init: std.process.Init) !void {
 
     var json = false;
     var no_map = false;
-    var check_existence = false;
+    var check_existence = true;
     var nfiles: usize = 0;
     var bad_read = false;
     var all_parsed = true;
@@ -54,8 +54,8 @@ pub fn main(init: std.process.Init) !void {
             json = true;
         } else if (std.mem.eql(u8, a, "--no-map")) {
             no_map = true;
-        } else if (std.mem.eql(u8, a, "--check-existence")) {
-            check_existence = true;
+        } else if (std.mem.eql(u8, a, "--no-check-existence")) {
+            check_existence = false;
         } else if (std.mem.eql(u8, a, "--list-rules")) {
             try snag.listRules(out);
             try out.flush();

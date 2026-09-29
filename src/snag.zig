@@ -349,11 +349,11 @@ pub fn scanWithMap(
 
 pub const Opts = struct {
     map: ?*const zephem.Map = null,
-    /// R013 (a std path with no map entry) is OPT-IN. Its usefulness depends on the map being
-    /// complete, and a gap in the map reads as a defect in your code — so it is off unless
-    /// asked for. Measured 3 findings across Zig's own std (550 files) after the
-    /// container-kind guard; all 3 are decls genuinely absent from the map.
-    check_existence: bool = false,
+    /// R013 (a std path with no map entry) is ON by default, at advisory severity: left off,
+    /// removed APIs (`std.fs.cwd`, `std.io.getStdOut`) passed the hook silently. Measured 3
+    /// findings across Zig's own std (550 files) after the container-kind guard; all 3 are
+    /// real dangling references (PLAN D5). zsnag's `--no-check-existence` turns it off.
+    check_existence: bool = true,
     /// Set to true when the structural rules actually ran — i.e. the file parsed. The caller
     /// needs this to know whether their silence is meaningful.
     ran_structural: ?*bool = null,

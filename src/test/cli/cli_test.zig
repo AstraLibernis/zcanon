@@ -621,3 +621,42 @@ test "cli: the daemon reports a type error ast-check cannot see, in a project wi
     const stop = try s.zcanonEnv(&.{ "daemon", "stop", proj }, &on);
     try testing.expect(std.mem.find(u8, stop.stdout, "daemon stopped") != null);
 }
+
+// R013 runs by default: a removed or invented std path must reach the reader of `check` and
+// the hook without a flag, and zsnag can still switch it off on its own.
+const unknown_std_src =
+    \\const std = @import("std");
+    \\pub fn main() void {
+    \\    _ = std.fs.cwd();
+    \\    _ = std.totally.fake.thing();
+    \\}
+    \\
+;
+
+test "cli: R013 fires by default in zcanon check, as an advisory" {
+    var s = try box("r013-check");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    const f = try s.write("unknown.zig", unknown_std_src);
+
+    const r = try s.zcanonEnv(&.{ "check", "--full", f }, &env);
+    try testing.expectEqual(@as(u8, 0), r.code); // advisory, never blocking
+    try testing.expect(r.outContains("[R013] "));
+    try testing.expect(r.outContains("`std.fs.cwd` is not in the zephem map"));
+    try testing.expect(r.outContains("`std.totally.fake.thing` is not in the zephem map"));
+}
+
+test "cli: zsnag runs R013 by default; --no-check-existence skips only R013" {
+    var s = try box("r013-zsnag");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    const f = try s.write("unknown.zig", unknown_std_src ++ "fn g() void { _ = std.mem.indexOf(u8, \"ab\", \"b\"); }\n");
+
+    const on = try s.zsnagEnv(&.{f}, &env);
+    try testing.expect(on.outContains("R013"));
+    try testing.expect(on.outContains("R011"));
+
+    const off = try s.zsnagEnv(&.{ "--no-check-existence", f }, &env);
+    try testing.expect(!off.outContains("R013"));
+    try testing.expect(off.outContains("R011"));
+}
