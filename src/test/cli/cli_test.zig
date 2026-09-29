@@ -697,3 +697,46 @@ test "cli: zsnag rejects unknown flags instead of reading them as files" {
     try testing.expectEqual(@as(u8, 2), bogus.code);
     try testing.expect(bogus.errContains("unknown flag --bogus"));
 }
+
+// B34: `zig build --watch` never re-runs the build script, so the daemon kept checking a
+// project against its old build graph after build.zig changed (a module added to
+// build.zig was still "no module named …"). It must restart the watcher on its own.
+test "cli: the daemon picks up a changed build.zig without being restarted" {
+    var s = try box("daemon-buildzig");
+    defer s.deinit();
+    const main = try s.write("proj/main.zig", "const opts = @import(\"opts\");\npub fn main() void {\n    _ = opts.x;\n}\n");
+    _ = try s.write("proj/build.zig", demo_build);
+    const on = [_][2][]const u8{.{ "ZCANON_DAEMON", "1" }};
+    const proj = try s.path("proj");
+    defer _ = s.zcanonEnv(&.{ "daemon", "stop", proj }, &on) catch {}; // zsnag:ok — nothing to do if already gone
+
+    // The module `opts` does not exist yet: wait (bounded) for that error.
+    _ = try s.hookEnv(main, &on);
+    var saw_error = false;
+    for (0..300) |_| {
+        try s.io.sleep(.fromMilliseconds(100), .awake);
+        _ = try s.hookEnv(main, &on);
+        const st = try s.zcanonEnv(&.{ "daemon", "status", proj }, &on);
+        if (std.mem.find(u8, st.stdout, "compiler errors") != null) {
+            saw_error = true;
+            break;
+        }
+    }
+    try testing.expect(saw_error);
+
+    // Add the module in build.zig only; main.zig is untouched.
+    const with_opts = demo_build[0 .. demo_build.len - 2] ++
+        "    const o = b.addOptions();\n    o.addOption(u32, \"x\", 1);\n    exe.root_module.addOptions(\"opts\", o);\n}\n";
+    _ = try s.write("proj/build.zig", with_opts);
+    var clean = false;
+    for (0..600) |_| {
+        try s.io.sleep(.fromMilliseconds(100), .awake);
+        _ = try s.hookEnv(main, &on);
+        const st = try s.zcanonEnv(&.{ "daemon", "status", proj }, &on);
+        if (std.mem.find(u8, st.stdout, "compiler ok") != null) {
+            clean = true;
+            break;
+        }
+    }
+    try testing.expect(clean);
+}

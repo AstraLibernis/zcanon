@@ -200,6 +200,8 @@ const Daemon = struct {
     diag_text: std.ArrayList([]u8) = .empty,
     watcher_pid: ?std.posix.pid_t = null,
     stopping: bool = false,
+    /// Set by `buildFileLoop` when it stops the watcher on purpose.
+    restarting: std.atomic.Value(bool) = .init(false),
 
     fn now(d: *Daemon) i96 {
         return std.Io.Clock.real.now(d.c.io).nanoseconds;
@@ -331,6 +333,34 @@ const Daemon = struct {
         return false;
     }
 
+    /// `build.zig` and `build.zig.zon` mtimes combined: a change to either can change the
+    /// build graph.
+    fn buildFilesStamp(d: *Daemon) i96 {
+        const zon = blk: {
+            const p = std.fs.path.join(d.c.gpa, &.{ d.root, "build.zig.zon" }) catch break :blk 0;
+            defer d.c.gpa.free(p);
+            const st = std.Io.Dir.cwd().statFile(d.c.io, p, .{}) catch break :blk 0;
+            break :blk st.mtime.nanoseconds;
+        };
+        return d.buildZigMtime() +% zon;
+    }
+
+    /// `zig build --watch` recompiles sources but never re-runs the build script, so a
+    /// changed build.zig (a new module, option or step) kept being checked against the old
+    /// graph and reported errors that were not there (B34). Restart the watcher when the
+    /// project's build files change; `watchLoop` starts it again on the new graph.
+    fn buildFileLoop(d: *Daemon) void {
+        var seen = d.buildFilesStamp();
+        while (!d.stopping) {
+            d.c.io.sleep(.fromSeconds(2), .awake) catch return;
+            const stamp = d.buildFilesStamp();
+            if (stamp == seen) continue;
+            seen = stamp;
+            d.restarting.store(true, .release);
+            d.killWatcher();
+        }
+    }
+
     fn buildZigMtime(d: *Daemon) i96 {
         const p = std.fs.path.join(d.c.gpa, &.{ d.root, "build.zig" }) catch return 0;
         defer d.c.gpa.free(p);
@@ -371,6 +401,10 @@ const Daemon = struct {
             const began = d.now();
             d.runWatcher(dir) catch {}; // zsnag:ok — exit is handled below, whatever the cause
             if (d.stopping) return;
+            if (d.restarting.swap(false, .acq_rel)) {
+                d.setState(.down, "build files changed; restarting the compiler watcher");
+                continue; // a deliberate restart, not a failure: no quick-exit count, no pause
+            }
             if (d.now() - began < 60 * std.time.ns_per_s) quick_exits += 1 else quick_exits = 0;
             if (quick_exits >= 5) {
                 d.setState(.down, "the compiler watcher keeps exiting; run `zig build check` in the project (or `zig build` if it has no check step) to see why");
@@ -512,6 +546,8 @@ pub fn serve(parent: vars.Ctx, root: []const u8) !void {
     defer watch.cancel(c.io);
     var idle = try c.io.concurrent(Daemon.idleLoop, .{&d});
     defer idle.cancel(c.io);
+    var build_files = try c.io.concurrent(Daemon.buildFileLoop, .{&d});
+    defer build_files.cancel(c.io);
 
     while (!d.stopping) {
         const stream = server.accept(c.io) catch continue;
