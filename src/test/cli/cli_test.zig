@@ -660,3 +660,29 @@ test "cli: zsnag runs R013 by default; --no-check-existence skips only R013" {
     try testing.expect(!off.outContains("R013"));
     try testing.expect(off.outContains("R011"));
 }
+
+// B33: a symlinked skills dir made `setup` write the installed (path-filled) skill over the
+// repo template, and 33d42a1 committed it. The template must keep its placeholders, and an
+// install path that resolves to the template must be refused.
+fn templatePath(s: *h.Sandbox) ![]const u8 {
+    return std.fs.path.join(s.gpa(), &.{ build_options.bin_dir, "..", "..", "skill", "SKILL.md" });
+}
+
+test "cli: the repo's skill template keeps its placeholders" {
+    var s = try box("skill-template");
+    defer s.deinit();
+    const text = try std.Io.Dir.cwd().readFileAlloc(s.io, try templatePath(&s), s.gpa(), .unlimited);
+    for ([_][]const u8{ "{{ZCANON}}", "{{ZSNAG}}", "{{ZEPHEM}}" }) |ph| {
+        try testing.expect(std.mem.find(u8, text, ph) != null);
+    }
+}
+
+test "cli: doctor refuses an installed skill that resolves to the template" {
+    var s = try box("skill-is-template");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    // doctor never writes, so pointing it at the real template is safe.
+    const r = try s.zcanonEnv(&.{"doctor"}, &.{ env[0], .{ "ZCANON_SKILL", try templatePath(&s) } });
+    try testing.expectEqual(@as(u8, 1), r.code);
+    try testing.expect(r.outContains("resolves to this checkout's template"));
+}

@@ -387,6 +387,16 @@ fn skill(c: vars.Ctx, r: *Report, mode: Mode) !void {
     const src = try renderSkill(c, template);
 
     const dst = try vars.skillPath(c);
+    // A symlinked skills dir makes the install target the template itself: writing would
+    // replace the repo's {{…}} placeholders with this machine's paths (B33). Refuse.
+    const cwd = std.Io.Dir.cwd();
+    const real_dst: ?[:0]u8 = cwd.realPathFileAlloc(c.io, dst, c.gpa) catch null;
+    const real_src: ?[:0]u8 = cwd.realPathFileAlloc(c.io, src_path, c.gpa) catch null;
+    if (real_dst != null and real_src != null and std.mem.eql(u8, real_dst.?, real_src.?)) {
+        try r.line(.fail, "skill {s} resolves to this checkout's template {s}; installing would overwrite it", .{ dst, src_path });
+        try r.todo("replace the symlink with a real directory, then run `zcanon setup`", .{});
+        return;
+    }
     const cur: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(c.io, dst, c.gpa, .unlimited) catch null;
     if (cur != null and std.mem.eql(u8, cur.?, src)) {
         try r.line(.ok, "skill installed and current ({s})", .{dst});
@@ -638,7 +648,6 @@ fn removeSkill(c: vars.Ctx, r: *Report) !void {
         const text = std.Io.Dir.cwd().readFileAlloc(c.io, skill_path, c.gpa, .limited(1 << 20)) catch "";
         if (isZcanonSkill(text)) try r.line(.fail, "the skill is STILL at {s}", .{skill_path});
     }
-
 }
 
 fn finish(r: *Report, w: *std.Io.Writer) !void {
