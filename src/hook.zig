@@ -311,7 +311,8 @@ fn renderShort(arena: std.mem.Allocator, base: []const u8, file: []const u8, fin
             if (tier.classify(f.severity, file) != t) continue;
             const msg = truncateUtf8(f.message, SHORT_MSG);
             try w.writer.print("\n{s} [{s}] {d}:{d}  {s}{s}", .{
-                t.mark(), f.rule, f.line, f.col, msg, if (msg.len < f.message.len) "…" else "",
+                t.mark(), f.rule, f.line, f.col, msg,
+                if (msg.len < f.message.len) "…" else "",
             });
         }
     }
@@ -372,7 +373,7 @@ pub fn renderSemantic(
 
     var w: std.Io.Writer.Allocating = .init(arena);
     try w.writer.print("zcanon: zig build check in {s} — {d} error{s}{s}", .{
-        root, errors, if (errors == 1) "" else "s",
+        root,                                                                                  errors, if (errors == 1) "" else "s",
         if (before_edit) " (from the build before this edit; it is being re-checked)" else "",
     });
     var shown: usize = 0;
@@ -386,7 +387,8 @@ pub fn renderSemantic(
             }
             const msg = truncateUtf8(d.message, SHORT_MSG);
             try w.writer.print("\n▲ [compile] {s}:{d}:{d}  {s}{s}", .{
-                d.path, d.line, d.col, msg, if (msg.len < d.message.len) "…" else "",
+                d.path, d.line, d.col, msg,
+                if (msg.len < d.message.len) "…" else "",
             });
             shown += 1;
         } else if (is_error) {
