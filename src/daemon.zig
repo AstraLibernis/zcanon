@@ -388,14 +388,14 @@ const Daemon = struct {
     fn watchLoop(d: *Daemon) void {
         var quick_exits: u32 = 0;
         while (!d.stopping) {
-            const seen_mtime = d.buildZigMtime();
+            const seen_mtime = d.buildFilesStamp();
             const dir = d.checkDir() catch |e| {
                 d.setState(.down, @errorName(e));
                 d.c.io.sleep(.fromSeconds(5), .awake) catch return;
                 continue;
             } orelse {
                 d.setState(.down, "build.zig does not build (`zig build -l` failed); waiting for it to change");
-                while (!d.stopping and d.buildZigMtime() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
+                while (!d.stopping and d.buildFilesStamp() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
                 continue;
             };
             const began = d.now();
@@ -408,7 +408,7 @@ const Daemon = struct {
             if (d.now() - began < 60 * std.time.ns_per_s) quick_exits += 1 else quick_exits = 0;
             if (quick_exits >= 5) {
                 d.setState(.down, "the compiler watcher keeps exiting; run `zig build check` in the project (or `zig build` if it has no check step) to see why");
-                while (!d.stopping and d.buildZigMtime() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
+                while (!d.stopping and d.buildFilesStamp() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
                 quick_exits = 0;
                 continue;
             }

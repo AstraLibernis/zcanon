@@ -740,3 +740,42 @@ test "cli: the daemon picks up a changed build.zig without being restarted" {
     }
     try testing.expect(clean);
 }
+
+// B34, second half: while a project did not build, the daemon waited for build.zig only,
+// so fixing a broken build.zig.zon was never noticed.
+test "cli: the daemon recovers when only build.zig.zon is fixed" {
+    var s = try box("daemon-zon");
+    defer s.deinit();
+    const main = try s.write("proj/main.zig", "pub fn main() void {}\n");
+    _ = try s.write("proj/build.zig", demo_build);
+    _ = try s.write("proj/build.zig.zon", "this is not zon\n");
+    const on = [_][2][]const u8{.{ "ZCANON_DAEMON", "1" }};
+    const proj = try s.path("proj");
+    defer _ = s.zcanonEnv(&.{ "daemon", "stop", proj }, &on) catch {}; // zsnag:ok — nothing to do if already gone
+
+    _ = try s.hookEnv(main, &on);
+    var down = false;
+    for (0..300) |_| {
+        try s.io.sleep(.fromMilliseconds(100), .awake);
+        _ = try s.hookEnv(main, &on);
+        const st = try s.zcanonEnv(&.{ "daemon", "status", proj }, &on);
+        if (std.mem.find(u8, st.stdout, "does not build") != null) {
+            down = true;
+            break;
+        }
+    }
+    try testing.expect(down);
+
+    try std.Io.Dir.cwd().deleteFile(s.io, try s.path("proj/build.zig.zon"));
+    var ok = false;
+    for (0..600) |_| {
+        try s.io.sleep(.fromMilliseconds(100), .awake);
+        _ = try s.hookEnv(main, &on);
+        const st = try s.zcanonEnv(&.{ "daemon", "status", proj }, &on);
+        if (std.mem.find(u8, st.stdout, "compiler ok") != null) {
+            ok = true;
+            break;
+        }
+    }
+    try testing.expect(ok);
+}
