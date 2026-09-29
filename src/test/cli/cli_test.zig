@@ -686,3 +686,14 @@ test "cli: doctor refuses an installed skill that resolves to the template" {
     try testing.expectEqual(@as(u8, 1), r.code);
     try testing.expect(r.outContains("resolves to this checkout's template"));
 }
+
+test "cli: zsnag rejects unknown flags instead of reading them as files" {
+    var s = try box("zsnag-flags");
+    defer s.deinit();
+    const old = try s.zsnag(&.{"--check-existence"});
+    try testing.expectEqual(@as(u8, 2), old.code);
+    try testing.expect(old.errContains("R013 is on by default"));
+    const bogus = try s.zsnag(&.{"--bogus"});
+    try testing.expectEqual(@as(u8, 2), bogus.code);
+    try testing.expect(bogus.errContains("unknown flag --bogus"));
+}

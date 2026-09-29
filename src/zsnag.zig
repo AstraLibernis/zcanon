@@ -64,6 +64,13 @@ pub fn main(init: std.process.Init) !void {
             try out.writeAll(usage);
             try out.flush();
             return;
+        } else if (std.mem.eql(u8, a, "--check-existence")) {
+            // Renamed when R013 became default-on; say so rather than treat it as a file.
+            try stderr(io, "zsnag: --check-existence was removed: R013 is on by default (--no-check-existence turns it off)\n", .{});
+            std.process.exit(2);
+        } else if (std.mem.startsWith(u8, a, "--")) {
+            try stderr(io, "zsnag: unknown flag {s}\n" ++ usage, .{a});
+            std.process.exit(2);
         } else {
             try argv.append(gpa, a);
         }
