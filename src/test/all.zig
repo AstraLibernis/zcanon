@@ -14,4 +14,5 @@ test {
     _ = @import("oracle_arity_test.zig");
     _ = @import("semantic_test.zig");
     _ = @import("publish_test.zig");
+    _ = @import("advice_test.zig");
 }

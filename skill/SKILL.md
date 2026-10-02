@@ -94,6 +94,12 @@ Full removal: `{{ZCANON}} uninstall`.
 3. Read the hook's findings (or run `check`) and fix them; `zig ast-check` must be clean
 4. Compile and run the tests before claiming the code works
 
+## Your most repeated mistakes
+
+<!-- zcanon:mistakes -->
+None recorded yet. This list fills in from the book as mistakes are made.
+<!-- /zcanon:mistakes -->
+
 ## Modern Zig 0.16 shapes your training data probably gets wrong
 
     var list: std.ArrayList(u8) = .empty;   // NOT ArrayList(u8).init(gpa)

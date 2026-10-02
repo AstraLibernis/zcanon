@@ -419,6 +419,25 @@ test "cli: doctor on a fresh sandbox fails and changes nothing" {
     try testing.expect(!s.exists("config/zephem-home"));
 }
 
+test "cli: setup fills the skill's mistake list from the book, and doctor leaves it alone" {
+    var s = try box("setup-mistakes");
+    defer s.deinit();
+    const env = try setupEnv(&s);
+    _ = try s.write("config/book.tsv", "rule\tseverity\tcount\tfirst_ts\tlast_ts\tfile\tline\tpattern\tmessage\tsnippet\n" ++
+        "ast-check\terror\t3\t2026-09-28 00:00:00\t2026-09-30 00:00:00\t/x.zig\t1\tlocal constant shadows declaration of '…'\tm\tsnip\n");
+
+    const r = try s.zcanonEnv(&.{"setup"}, &env);
+    try testing.expectEqual(@as(u8, 0), r.code);
+    const installed = try s.read("skills/zcanon/SKILL.md");
+    try testing.expect(std.mem.find(u8, installed, "- **Shadowing** (3×, last 2026-09-30)") != null);
+
+    // doctor's live test runs the hook on a probe book; it must not rewrite the real skill
+    // from that empty book (it did, before the probe got a skill path of its own).
+    const d = try s.zcanonEnv(&.{"doctor"}, &env);
+    try testing.expectEqual(@as(u8, 0), d.code);
+    try testing.expectEqualStrings(installed, try s.read("skills/zcanon/SKILL.md"));
+}
+
 test "cli: setup installs the hook, records zephem, and proves the hook fires" {
     var s = try box("setup");
     defer s.deinit();

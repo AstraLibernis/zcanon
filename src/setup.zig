@@ -24,6 +24,8 @@ const builtin = @import("builtin");
 const vars = @import("vars.zig");
 const settings = @import("settings.zig");
 const zephem = @import("zephem.zig");
+const book = @import("book.zig");
+const advice = @import("advice.zig");
 
 pub const Mode = enum { setup, doctor };
 
@@ -325,6 +327,9 @@ fn liveTest(c: vars.Ctx, r: *Report, sp: []const u8, mode: Mode) !void {
 
     var env = try c.env.clone(c.gpa);
     try env.put("ZCANON_BOOK", try std.fs.path.join(c.gpa, &.{ dir, "book.tsv" }));
+    // The hook refreshes the installed skill's mistake list from the book it writes; aimed at
+    // the probe's empty book, it would wipe the real skill's list. Give it a skill of its own.
+    try env.put("ZCANON_SKILL", try std.fs.path.join(c.gpa, &.{ dir, "SKILL.md" }));
 
     const term = runShell(c, cmd, &env, in_path, out_path, err_path) catch |e| {
         try r.line(.fail, "live test: could not run the installed command ({s})", .{@errorName(e)});
@@ -421,7 +426,7 @@ fn skill(c: vars.Ctx, r: *Report, mode: Mode) !void {
 
 /// Fill the skill's `{{ZCANON}}`, `{{ZSNAG}}` and `{{ZEPHEM}}` with this machine's real paths,
 /// so the model can run every command in it verbatim with no environment variables set.
-pub fn renderSkill(c: vars.Ctx, template: []const u8) ![]u8 {
+pub fn renderSkill(c: vars.Ctx, template: []const u8) ![]const u8 {
     const zephem_exe: []const u8 = if (zephem.locateHome(c)) |h| try zephem.exePath(c, h.path) else "zephem";
     const subs = [_][2][]const u8{
         .{ "{{ZCANON}}", try shellWord(c.gpa, try vars.selfExe(c)) },
@@ -435,7 +440,29 @@ pub fn renderSkill(c: vars.Ctx, template: []const u8) ![]u8 {
         _ = std.mem.replace(u8, out, s[0], s[1], next);
         out = next;
     }
-    return out;
+    return advice.fill(c.gpa, out, try bookEntries(c));
+}
+
+/// The book's mistakes, for the skill's list. An unreadable or old-format book lists none.
+pub fn bookEntries(c: vars.Ctx) ![]const book.Entry {
+    const text = std.Io.Dir.cwd().readFileAlloc(c.io, try vars.bookPath(c), c.gpa, .unlimited) catch return &.{};
+    if (book.isOpenFormat(text)) return &.{};
+    var h: book.History = .init(c.gpa);
+    try h.parse(text);
+    return h.entries.items;
+}
+
+/// Refresh the installed skill's list after the book changed. Best-effort: the book is the
+/// record, the list only a view of it, so a failure here is never reported as a book failure.
+/// Writes only when the list differs, never into a file that still has the template's
+/// placeholders (a skills dir symlinked to the checkout, B33), and never creates the skill.
+pub fn refreshSkillList(c: vars.Ctx, entries: []const book.Entry) void {
+    const dst = vars.skillPath(c) catch return;
+    const cur = std.Io.Dir.cwd().readFileAlloc(c.io, dst, c.gpa, .limited(1 << 20)) catch return;
+    if (std.mem.find(u8, cur, "{{ZCANON}}") != null) return;
+    const next = advice.fill(c.gpa, cur, entries) catch return;
+    if (std.mem.eql(u8, next, cur)) return;
+    std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = dst, .data = next }) catch return;
 }
 
 /// A path the model can paste into a shell: quoted only when it has to be.

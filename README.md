@@ -136,6 +136,15 @@ zig-out/bin/zsnag yourfile.zig       # the linter alone
 zig build test                       # unit tests + the end-to-end CLI tests
 ```
 
+The installed skill carries a **"Your most repeated mistakes"** list written from the book:
+warn/error mistakes made at least twice, grouped by the advice that prevents them (every
+shadowing error is one line), most frequent first, top 10. `setup` fills it and the hook
+refreshes it whenever the book changes, so the model reads the mistakes it actually makes
+before it writes, not only after the hook catches them. Advisories (R007's casts, the
+compiler's "declared here" notes) and errors from an edit in progress (a name used before the
+edit that defines it, a file the next edit creates) are left out. Advice for compiler
+messages lives in `src/advice.zig`; a message with none yet is listed as its pattern.
+
 `zcanon disable` / `zcanon enable` switch the hook off and on without touching settings;
 `zcanon prune` drops findings for files that no longer exist.
 

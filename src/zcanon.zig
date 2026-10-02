@@ -559,6 +559,7 @@ const Run = struct {
         }
         try writeHistory(r.c, history);
         try updateBugs(r.c, history.entries.items, r.now);
+        setup.refreshSkillList(r.c, history.entries.items);
     }
 
     /// Load the open set and the history (see `loadLedger`).
