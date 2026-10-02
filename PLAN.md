@@ -94,17 +94,67 @@ Both are closed: the hook is installed and verified firing, the Nushell layer is
 book is a TSV (B6/B7/B8 in the ledger). The book still has no accumulated history — item 1 below
 is now about *gathering* data, not about making storage work.
 
+**What happened on 2026-10-02: the book was read for the first time.** About three days of
+real work, almost all on zmural: 38 mistakes made 221 times. Sorted by cause rather than rule
+(R007's 132 casts and the compiler's "declared here" notes left out as advisories):
+
+| Cause | ~Count | Examples | Preventable? |
+|---|---:|---|---|
+| Edit in progress | ~25 | undeclared identifier (16: used before the edit that defines it), FileNotFound (7), missing module (2) | Not mistakes; they clear on the next edit |
+| Zig's strictness, not memory | ~22 | shadowing (14), unused parameter/local (5), non-exhaustive switch, declaration between fields | Yes, by habit: the rules are stable |
+| Stale memory of std | ~14 | R011 deprecations (6), wrong argument count (3), no member named (2), type mismatch | Yes: the map has the answer; the lookup was skipped |
+| Judgment | 5 | empty `catch {}`, `catch unreachable` | Partly; some are deliberate |
+| Syntax slips | 6 | invalid token, raw control byte in a string | Little to gain |
+
+So the hook corrects; it does not prevent, and the model cannot learn between sessions. The two
+levers are context before writing and a gate before an edit lands. Built the same day:
+
+- **The skill's "most repeated mistakes" list** (item 1 below, now done). `src/advice.zig`
+  selects warn/error mistakes made 2+ times, groups them by the advice that prevents them
+  (every shadowing variant is one line), drops advisories and edit-in-progress errors, keeps
+  the top 10. Compiler messages get hand-written advice; zsnag's messages are their own advice.
+  `setup` fills a marked block in the installed SKILL.md (`<!-- zcanon:mistakes -->`) and the
+  hook refreshes it whenever the book changes (best-effort, never into a file still holding the
+  template's placeholders). Building it exposed B35.
+- **`zcanon book publish`**: a sanitized history of the book in `history/` of this repo, so
+  the record outlives one machine's `~/.config/zcanon`. Only rule, severity, count, dates,
+  project name and message pattern leave the machine, never paths, lines or source: the book
+  records zmural, which is private, and this repo is public. Counts merge by maximum (a
+  re-publish is a no-op, a reset book cannot shrink the history; two machines would
+  undercount). Commits are made in a worktree beside the book on top of origin's branch and
+  touch only `history/`. On here since 2026-10-02 (`book publish on`): the hook starts it in
+  the background at most once a day. Consequence: local `main` falls behind by `history:`
+  commits, so pull with `--rebase` before pushing other work.
+
 **Next (in rough order of value)**
-1. **Accumulate the book on real work**, then read it: the most frequent rules/APIs become a
-   short cheat-sheet baked into `skill/SKILL.md`, shifting correction from reactive (hook
-   catches me) to proactive (skill warns me first). Blocked on nothing but time and edits.
-2. **Harden the skill** — tune the wording so the model reliably uses the tools without
+1. ~~**Accumulate the book on real work**, then bake the most frequent mistakes into the
+   skill~~ — **done 2026-10-02** (the generated list above). Still open: measure it (item 2).
+2. **Measure whether the list prevents anything.** The book counts mistakes but not edits, so
+   it has no rate: a falling count may only mean less Zig was written. Count hook runs on
+   `.zig` edits beside the book and report mistakes per edit before/after. Shadowing (14 on
+   2026-10-02) is the line to watch.
+3. **Gate std APIs before an edit lands** (only if item 2 shows the stale-memory row is not
+   falling): a PreToolUse check that runs R011–R013 on the text about to be written and
+   rejects a deprecated or nonexistent API, forcing the lookup the skill asks for. Edit/Write
+   only (a shell edit has no text to inspect beforehand); a few ms per edit.
+4. **New zsnag rules for silent bugs the compiler cannot see** (discussed 2026-10-02, none
+   built): a buffered `std.Io.Writer` never flushed (output silently lost; R014's cousin);
+   `defer x.deinit()` then returning `x`/`x.items` (use after free); returning a slice of a
+   local array (dangling); allocating and returning ownership with no `errdefer` (leak on the
+   error path). Each must pass the usual bar: every positive confirmed by the compiler or a
+   test, zero hits on the 648-file known-good corpus.
+5. **Make R007 smarter**: 132 of the book's 221 hits, mostly on casts already range-checked
+   above. Suppress when the cast is visibly guarded (a range check just before,
+   `std.math.cast`, a slice index) and keep the rest.
+6. **`--fix` for the mechanical rules**: R003 (`mem.copy` → `@memcpy`), R011 (the map names the
+   replacement), R014 (`writer` → `writerStreaming`).
+7. **Harden the skill** — tune the wording so the model reliably uses the tools without
    over-calling them. Measure by dogfooding on real Zig tasks.
-3. **Precise `zsnag` (full-AST version)** — `zsnag` already uses the real Zig tokenizer;
+8. **Precise `zsnag` (full-AST version)** — `zsnag` already uses the real Zig tokenizer;
    upgrade the heuristic rules (R006/R008) to `std.zig.Ast` (the parse tree) to cut the
    text-pattern false positives. This is now the highest-value fix, not a nicety: B1 and B10
    are both this bug, and between them they fire on most real Zig files.
-4. **Bundle as one installable unit** — a single installer that wires tools + hook + skill
+9. **Bundle as one installable unit** — a single installer that wires tools + hook + skill
    + book in one step, so "copy home, settle on Claude" is literally one command.
 
 ## Bug ledger
@@ -113,6 +163,7 @@ Defects, closed explicitly rather than quietly. Opened 2026-08-10.
 
 | # | Status | Where | Defect |
 |---|---|---|---|
+| B35 | **CLOSED** 2026-10-02 | `setup.zig` | **doctor rewrote the installed skill while promising to change nothing.** The live probe in `setup`/`doctor` runs the hook with `ZCANON_BOOK` aimed at a throwaway book, but the skill path was the real one. Once the hook refreshed the skill's mistake list from the book it wrote, every probe wiped the real list (the probe's book is empty), and doctor then reported its own damage as "skill out of date". **Fixed:** the probe also gets `ZCANON_SKILL` under its own directory. A CLI test runs setup with a seeded book, then doctor, and requires the installed skill byte-identical; it fails with the fix reverted. |
 | B34 | **CLOSED** 2026-09-29 | `daemon.zig` | **The background compiler kept checking a project against its old build graph after build.zig changed.** `zig build --watch` recompiles sources but never re-runs the build script, and the daemon only re-read build.zig after the watcher exited, which a healthy watcher never does. Found in use: a module added to zsift's build.zig (`bench_options`) was reported as `no module named 'bench_options'` on every edit for hours, while a fresh `zig build check` passed. **Fixed:** a third daemon loop polls `build.zig` + `build.zig.zon` every 2 s and restarts the watcher when they change (a deliberate restart: no quick-exit count, no pause). CLI test: a module added in build.zig clears the error without restarting anything; it fails against the unfixed daemon. Follow-up the same day: while a project did not build, the wait loops still watched only build.zig, so fixing a broken build.zig.zon was never noticed; they now watch both (second CLI test, also failing before the fix). |
 | B33 | **CLOSED** 2026-09-29 | `setup.zig` | **`setup` overwrote the repo's skill template with the installed copy.** `~/.claude/skills/zcanon` had been a symlink into `skill/` since the 09-08 restore, so each install wrote this machine's paths over the `{{ZCANON}}`/`{{ZSNAG}}`/`{{ZEPHEM}}` placeholders, and 33d42a1 committed the result. The setup test only checked that the *installed* copy had no `{{`, which still passed. **Fixed:** template restored; `setup`/`doctor` now fail if the install path resolves to the template; CLI tests check that the template keeps its placeholders and that doctor catches the symlink case. The symlink on this machine was replaced with a real directory. |
 | B32 | **CLOSED** 2026-09-29 | `snag.zig` / `zsnag.zig` | **R013 was opt-in, so removed APIs passed the hook silently.** `std.fs.cwd()`, `std.io.getStdOut()` and an invented `std.totally.fake.thing()` all got "no findings" from the hook and `zcanon check`, while the skill described R013 as if it ran. The opt-in (B12) dated from its 219 false positives; after the container-kind guard it is 3 on std, all real (D5). **Changed:** R013 is on by default at advisory severity everywhere; zsnag's `--check-existence` is replaced by `--no-check-existence`. CLI tests cover both the default and the switch. |
