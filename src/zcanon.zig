@@ -10,6 +10,7 @@ const vars = @import("vars.zig");
 const settings = @import("settings.zig");
 const hook = @import("hook.zig");
 const book = @import("book.zig");
+const publish = @import("publish.zig");
 const report = @import("report.zig");
 const tier = @import("tier.zig");
 const setup = @import("setup.zig");
@@ -43,6 +44,9 @@ const usage =
     \\                     the project's background process (started by the hook; exits when idle)
     \\  book [report]      the book: every mistake, how often, when, and where it last was:
     \\                     (default: most frequent) | rules | recent [N] | open | R0NN
+    \\  book publish [on [repo] | off | status]
+    \\                     push a sanitized history of the book (no code, no paths) to
+    \\                     <repo>/history/ (default: this zcanon checkout); `on` = daily
     \\  bugs               the bug report: mistakes made 5+ times (never pruned)
     \\  prune              forget open findings in files that no longer exist
     \\
@@ -106,6 +110,8 @@ fn exists(c: vars.Ctx, path: []const u8) bool {
 fn runHook(c: vars.Ctx) !void {
     const flag = try vars.disableFlagPath(c);
     if (exists(c, flag)) return; // off switch: silent no-op, settings untouched
+    // The daily publish, if turned on: a background start at most once a day, never waited for.
+    defer publish.maybeStart(c);
 
     var in_buf: [1 << 16]u8 = undefined;
     var reader = std.Io.File.stdin().reader(c.io, &in_buf);
@@ -717,6 +723,7 @@ fn runStatus(c: vars.Ctx) !void {
         book_path,
         if (exists(c, book_path)) "" else "   (empty — nothing recorded yet)",
     });
+    try w.interface.print("daily publish: {s}\n", .{publish.configuredRepo(c) orelse "off (zcanon book publish on)"});
     try w.interface.flush();
 }
 
@@ -894,6 +901,7 @@ fn loadLedger(c: vars.Ctx, open: *book.Book, history: *book.History) !void {
 }
 
 fn runBook(c: vars.Ctx, args: []const []const u8) !void {
+    if (args.len > 0 and std.mem.eql(u8, args[0], "publish")) return runPublish(c, args[1..]);
     var open: book.Book = .init(c.gpa);
     var history: book.History = .init(c.gpa);
     try loadLedger(c, &open, &history);
@@ -902,6 +910,55 @@ fn runBook(c: vars.Ctx, args: []const []const u8) !void {
     var buf: [1 << 16]u8 = undefined;
     var w = stdout(c, &buf);
     try report.render(c.gpa, &w.interface, history.entries.items, open.recs.items, mode);
+    try w.interface.flush();
+}
+
+/// `zcanon book publish [--auto | on [repo] | off | status]`.
+fn runPublish(c: vars.Ctx, args: []const []const u8) !void {
+    var buf: [2048]u8 = undefined;
+    var w = stdout(c, &buf);
+    const sub = if (args.len > 0) args[0] else "";
+    if (std.mem.eql(u8, sub, "on")) {
+        const dir = if (args.len > 1) args[1] else (publish.defaultRepo(c) orelse
+            return fail(c, "this zcanon binary is not inside a git checkout; name the repo: zcanon book publish on <repo>\n"));
+        const repo = publish.repoRoot(c, dir) orelse
+            return fail(c, try std.fmt.allocPrint(c.gpa, "{s} is not inside a git checkout\n", .{dir}));
+        const flag = try publish.repoFlagPath(c);
+        try std.Io.Dir.cwd().createDirPath(c.io, std.fs.path.dirname(flag) orelse ".");
+        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = flag, .data = try std.fmt.allocPrint(c.gpa, "{s}\n", .{repo}) });
+        try w.interface.print("daily publish on: {s}/{s}/ (the hook starts it at most once a day)\n", .{ repo, publish.dir_name });
+    } else if (std.mem.eql(u8, sub, "off")) {
+        std.Io.Dir.cwd().deleteFile(c.io, try publish.repoFlagPath(c)) catch |e| switch (e) {
+            error.FileNotFound => {},
+            else => return e,
+        };
+        try w.interface.writeAll("daily publish off\n");
+    } else if (std.mem.eql(u8, sub, "status")) {
+        try w.interface.print("daily publish: {s}\n", .{publish.configuredRepo(c) orelse "off"});
+        const log = std.Io.Dir.cwd().readFileAlloc(c.io, try publish.sidePath(c, "publish.log"), c.gpa, .limited(1 << 16)) catch "";
+        try w.interface.print("last run: {s}\n", .{if (log.len > 0) std.mem.trim(u8, log, "\n") else "never"});
+    } else if (sub.len == 0 or std.mem.eql(u8, sub, "--auto")) {
+        const auto = sub.len > 0;
+        const repo = publish.configuredRepo(c) orelse (if (auto) return else publish.defaultRepo(c)) orelse
+            return fail(c, "no repo to publish into: zcanon book publish on <repo>\n");
+        var open: book.Book = .init(c.gpa);
+        var history: book.History = .init(c.gpa);
+        try loadLedger(c, &open, &history);
+        const outcome = publish.run(c, repo, history.entries.items);
+        var sbuf: [20]u8 = undefined;
+        const when = book.stamp(&sbuf, book.nowSeconds(c.io)) catch "?";
+        const line = switch (outcome) {
+            .pushed => |p| try std.fmt.allocPrint(c.gpa, "{s} pushed {s} ({d} rows) to {s}/{s}/", .{ when, p.commit, p.rows, repo, publish.dir_name }),
+            .unchanged => try std.fmt.allocPrint(c.gpa, "{s} nothing new to publish", .{when}),
+            .failed => |why| try std.fmt.allocPrint(c.gpa, "{s} FAILED: {s}", .{ when, why }),
+        };
+        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try publish.sidePath(c, "publish.log"), .data = try std.fmt.allocPrint(c.gpa, "{s}\n", .{line}) });
+        if (auto) return;
+        try w.interface.print("{s}\n", .{line});
+        try w.interface.flush();
+        if (outcome == .failed) std.process.exit(1);
+        return;
+    } else return fail(c, "usage: zcanon book publish [on [repo] | off | status]\n");
     try w.interface.flush();
 }
 

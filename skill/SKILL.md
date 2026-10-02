@@ -82,7 +82,7 @@ first and last, and where it last happened (`path:line`). Making it again counts
 never removes the line. A finding still in the file on the next save is not counted again. A
 mistake made 5 times goes into the bug report (`bugs.md` beside the book), which is never
 pruned. Read them with `{{ZCANON}} book` (most frequent first), `book rules`, `book recent [N]`,
-`book open` (findings in the code right now), `book R0NN`, and `{{ZCANON}} bugs`.
+`book open` (findings in the code right now), `book R0NN`, and `{{ZCANON}} bugs`. `book publish` pushes a sanitized copy (no code, no paths) into a repo's `history/`.
 
 Off switch: `{{ZCANON}} disable` / `enable` toggle at runtime without touching settings.json.
 Full removal: `{{ZCANON}} uninstall`.

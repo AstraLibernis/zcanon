@@ -16,3 +16,4 @@ pub const setup = @import("setup.zig");
 pub const semantic = @import("semantic.zig");
 pub const daemon = @import("daemon.zig");
 pub const bugs = @import("bugs.zig");
+pub const publish = @import("publish.zig");

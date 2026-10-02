@@ -139,6 +139,27 @@ zig build test                       # unit tests + the end-to-end CLI tests
 `zcanon disable` / `zcanon enable` switch the hook off and on without touching settings;
 `zcanon prune` drops findings for files that no longer exist.
 
+### Publishing the book
+
+The book lives on one machine. `zcanon book publish` merges it into `history/` of a git repo
+(by default this checkout) and pushes, so the record of mistakes survives machines and
+reinstalls. This repo's own [history/](history/) is published from it.
+
+```sh
+zig-out/bin/zcanon book publish on [repo]  # daily: the hook starts it at most once a day
+zig-out/bin/zcanon book publish            # now
+zig-out/bin/zcanon book publish status     # on/off and the last run's result
+zig-out/bin/zcanon book publish off
+```
+
+What is pushed is sanitized: rule, severity, count, first/last date, the project's name (the
+enclosing git checkout) and the message pattern with quoted names as `'…'`. Never file paths,
+line numbers or source lines, so mistakes made in private projects can go into a public repo.
+Counts merge by maximum, so publishing the same book twice changes nothing and a reset book
+cannot shrink the history. The commit is made in a separate worktree beside the book, on top
+of the remote branch, and touches only `history/`; your checkout and its unpushed commits
+are left alone. Off by default.
+
 ### Uninstall
 
 ```sh
