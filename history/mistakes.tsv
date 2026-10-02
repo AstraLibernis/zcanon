@@ -1,0 +1,39 @@
+rule	severity	count	first_ts	last_ts	project	pattern
+ast-check	info	8	2026-09-28 17:18:59	2026-10-02 11:04:17	zcanon	declared here
+ast-check	error	9	2026-09-28 18:16:30	2026-10-02 11:04:17	zcanon	local constant shadows declaration of '…'
+compile	error	1	2026-09-28 16:56:41	2026-09-28 16:56:41	zcanon	local variable is never mutated
+R004	warn	1	2026-09-28 18:32:01	2026-09-28 18:32:01	zmural	catch unreachable crashes in release if it ever fails; handle the error.
+R005	warn	4	2026-09-28 17:23:06	2026-09-30 20:00:44	zmural	empty catch {} silently swallows an error.
+R007	info	132	2026-09-28 17:10:55	2026-09-30 20:00:44	zmural	this cast can panic/corrupt if out of range; verify first.
+R011	warn	1	2026-09-28 19:26:26	2026-09-28 19:26:26	zmural	`std.fs.max_path_bytes` is deprecated — the map says: use `std.Io.Dir.max_path_bytes`.
+R011	warn	4	2026-09-28 17:26:14	2026-09-28 17:26:14	zmural	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
+R011	warn	1	2026-09-28 18:53:20	2026-09-28 18:53:20	zmural	`std.mem.lastIndexOfScalar` is deprecated — the map says: use `findScalarLast`.
+ast-check	info	1	2026-09-28 17:18:59	2026-09-28 17:18:59	zmural	also declared here
+ast-check	error	1	2026-09-28 17:18:59	2026-09-28 17:18:59	zmural	ambiguous reference
+ast-check	error	1	2026-09-28 18:16:25	2026-09-28 18:16:25	zmural	declarations are not allowed between container fields
+ast-check	info	1	2026-09-30 15:44:47	2026-09-30 15:44:47	zmural	duplicate name here
+ast-check	error	1	2026-09-30 15:44:47	2026-09-30 15:44:47	zmural	duplicate struct member name '…'
+ast-check	error	4	2026-09-28 20:05:22	2026-09-30 20:01:26	zmural	expected expression, found '…'
+ast-check	error	1	2026-09-30 11:07:32	2026-09-30 11:07:32	zmural	expected statement, found '…'
+ast-check	info	1	2026-09-28 18:16:25	2026-09-28 18:16:25	zmural	field after declarations here
+ast-check	info	1	2026-09-28 18:16:25	2026-09-28 18:16:25	zmural	field before declarations here
+ast-check	error	1	2026-09-28 18:16:30	2026-09-28 18:16:30	zmural	function parameter shadows declaration of '…'
+ast-check	error	1	2026-09-30 14:08:04	2026-09-30 14:08:04	zmural	local variable shadows declaration of '…'
+ast-check	error	1	2026-09-30 19:41:38	2026-09-30 19:41:38	zmural	string literal contains invalid byte: '…'
+ast-check	info	1	2026-09-30 15:44:47	2026-09-30 15:44:47	zmural	struct declared here
+ast-check	error	3	2026-09-28 17:26:28	2026-09-30 15:56:16	zmural	unused function parameter
+ast-check	error	2	2026-09-28 17:26:28	2026-09-28 17:26:28	zmural	unused local constant
+ast-check	error	14	2026-09-28 17:26:55	2026-09-30 17:31:47	zmural	use of undeclared identifier '…'
+compile	error	1	2026-09-30 20:02:03	2026-09-30 20:02:03	zmural	'…' is not marked '…'
+compile	error	2	2026-09-28 19:28:39	2026-09-30 17:04:32	zmural	expected type '…', found '…'
+compile	error	2	2026-09-28 19:44:41	2026-09-28 19:50:14	zmural	local constant shadows declaration of '…'
+compile	error	1	2026-09-30 14:08:04	2026-09-30 14:08:04	zmural	local variable shadows declaration of '…'
+compile	error	3	2026-09-30 14:29:05	2026-09-30 14:29:05	zmural	member function expected 4 argument(s), found 3
+compile	error	1	2026-09-28 18:18:15	2026-09-28 18:18:15	zmural	no field named '…' in struct '…'
+compile	error	2	2026-09-30 15:57:52	2026-09-30 15:57:52	zmural	no module named '…' available within module '…'
+compile	error	2	2026-09-30 15:45:23	2026-09-30 17:22:29	zmural	root source file struct '…' has no member named '…'
+compile	error	1	2026-09-30 14:06:53	2026-09-30 14:06:53	zmural	switch must handle all possibilities
+compile	error	5	2026-09-30 15:45:23	2026-09-30 15:57:52	zmural	unable to load '…': FileNotFound
+compile	error	2	2026-09-28 19:59:25	2026-09-28 20:06:38	zmural	unable to open '…': FileNotFound
+compile	error	1	2026-09-30 14:38:07	2026-09-30 14:38:07	zmural	unreachable else prong; all cases already handled
+compile	error	2	2026-09-28 19:50:10	2026-09-30 17:31:47	zmural	use of undeclared identifier '…'
