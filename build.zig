@@ -45,6 +45,29 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the unit tests");
     test_step.dependOn(&run_tests.step);
 
+    // The unit tests under ThreadSanitizer, which reports data races at run time (the daemon and
+    // the hook run work on threads). Needs LLVM (the self-hosted x86 backend does not instrument),
+    // libc, and an explicit linux-gnu target, whose kernel headers ship with Zig; the native one
+    // reads /usr/include, which lacks them here. Both modules are rebuilt for it.
+    const tsan_target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu });
+    const tsan_lib = b.createModule(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = tsan_target,
+        .optimize = optimize,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    const tsan_mod = b.createModule(.{
+        .root_source_file = b.path("src/test/all.zig"),
+        .target = tsan_target,
+        .optimize = optimize,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    tsan_mod.addImport("zcanon", tsan_lib);
+    const tsan_tests = b.addTest(.{ .name = "zcanon-test-tsan", .root_module = tsan_mod, .use_llvm = true });
+    b.step("test-tsan", "Run the unit tests under ThreadSanitizer (data races)").dependOn(&b.addRunArtifact(tsan_tests).step);
+
     // CLI tests drive the REAL binaries end to end — install/uninstall/status/hook/book/prune.
     // Those paths had no automated coverage at all: every subcommand was only ever exercised
     // by hand, which is how the notice-duplication bug survived its own manual check.
