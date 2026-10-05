@@ -128,6 +128,10 @@ Confirm any other shape with `map find` before writing it.
 - `page_allocator` as a general allocator is slow — pass an allocator in. (Backing an arena
   with it is fine.)
 - `std.debug.print` left in shipped code — remove it or use `std.log`.
+- A large `var x: [N]T = undefined` inside a function (R015, advisory, >= 64 KiB): Debug and
+  ReleaseSafe fill all of it with 0xAA on every call. Fine in a once-per-command function; in
+  one called per row/node/round, size it to need or allocate it once outside the loop. (A 1 MB
+  scratch sized to the worst case made zarbor's ReleaseSafe 12x slower.)
 
 ## Checked against the real std (R011–R013)
 

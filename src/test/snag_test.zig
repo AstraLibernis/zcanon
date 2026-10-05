@@ -437,6 +437,13 @@ const rule_cases = [_]RuleCase{
     .{ .name = "r014_neg", .want = "", .src = "const std = @import(\"std\");\npub fn main(init: std.process.Init) !void { var buf: [64]u8 = undefined; var w = std.Io.File.stdout().writerStreaming(init.io, &buf); try w.interface.flush(); }" },
     .{ .name = "r008_arena_neg", .want = "", .src = "const std = @import(\"std\");\ntest { var arena: std.heap.ArenaAllocator = .init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); var l: std.ArrayList(u8) = .empty; try l.append(a, 1); }" },
     .{ .name = "r008_managed_heap", .want = "R008", .src = "const std = @import(\"std\");\ntest { var m: std.StringHashMap(u8) = .init(std.testing.allocator); try m.put(\"a\", 1); }" },
+    .{ .name = "r015_literal", .want = "R015", .src = "test { var b: [70000]u8 = undefined; _ = &b; }" },
+    .{ .name = "r015_product", .want = "R015", .src = "const n = 1000 * 100;\ntest { var b: [n]u8 = undefined; _ = &b; }" },
+    .{ .name = "r015_wide_elem", .want = "R015", .src = "test { var b: [10000]u64 = undefined; _ = &b; }" },
+    .{ .name = "r015_maxint_struct", .want = "R015", .src = "const std = @import(\"std\");\nconst Idx = u16;\nconst max_bins = std.math.maxInt(Idx);\nconst K = struct { bin: Idx, key: f64 };\nfn f() void { var s: [max_bins]K = undefined; _ = &s; }\ntest { f(); }" },
+    .{ .name = "r015_small_neg", .want = "", .src = "test { var b: [4096]u8 = undefined; _ = &b; }" },
+    .{ .name = "r015_global_neg", .want = "", .src = "var g: [100000]u8 = undefined;\ntest { _ = &g; }" },
+    .{ .name = "r015_init_neg", .want = "", .src = "test { var b: [70000]u8 = @splat(0); _ = &b; }" },
 };
 
 test "every rule case fires exactly the rules it should" {
@@ -457,4 +464,31 @@ test "every rule case fires exactly the rules it should" {
             return e;
         };
     }
+}
+
+test "R015 follows an array length into an imported file" {
+    // The zarbor shape: the length is a constant in another file, defined through a type alias.
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    try tmp.dir.writeFile(io, .{ .sub_path = "data.zig", .data = "const std = @import(\"std\");\npub const BinIdx = u16;\npub const max_bins = std.math.maxInt(BinIdx);\n" });
+    const src: [:0]const u8 = "const data = @import(\"data.zig\");\nconst K = struct { bin: data.BinIdx, key: f64 };\nfn f() void { var s: [data.max_bins]K = undefined; _ = &s; }\n";
+    const path = try std.fs.path.join(gpa, &.{ dir, "split.zig" });
+
+    var with_io: std.ArrayList(snag.Finding) = .empty;
+    try snag.scanWithOpts(gpa, path, src, &with_io, .{ .io = io });
+    try testing.expectEqual(@as(usize, 1), with_io.items.len);
+    try testing.expectEqualStrings("R015", with_io.items[0].rule().code);
+    try testing.expectEqual(@as(u32, 3), with_io.items[0].line);
+
+    // Without io the length is not judged, rather than guessed.
+    var no_io: std.ArrayList(snag.Finding) = .empty;
+    try snag.scanWithOpts(gpa, path, src, &no_io, .{});
+    try testing.expectEqual(@as(usize, 0), no_io.items.len);
 }

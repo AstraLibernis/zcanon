@@ -123,6 +123,7 @@ pub fn main(init: std.process.Init) !void {
             .check_existence = check_existence,
             .ran_structural = &parsed,
             .stale = stale,
+            .io = io,
         });
         // One unparseable file is enough to make the structural rules' silence meaningful
         // for this invocation.

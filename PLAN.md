@@ -55,7 +55,7 @@ paths filled in, and `zcanon doctor` reports when the installed copy has drifted
 ## Roadmap
 
 **Done**
-- `zsnag` (Zig) — 14 LLM-mistake rules in a registry (`--list-rules`), tokenizer-based; validated
+- `zsnag` (Zig) — 15 LLM-mistake rules in a registry (`--list-rules`), tokenizer-based; validated
   on real third-party code. 10 are self-contained; **R011/R012/R013 read the zephem map**, so
   their advice (the replacement name, the real signature) is data rather than a literal and
   cannot go stale. R003's premise is self-checked against the map at startup: if std ever

@@ -468,6 +468,7 @@ const Run = struct {
             .map = if (r.map) |*m| m else null,
             .ran_structural = &parsed,
             .stale = r.stale,
+            .io = c.io,
         });
         try active.append(c.gpa, book.GROUP_CORE);
         if (parsed) try active.append(c.gpa, book.GROUP_STRUCTURAL);

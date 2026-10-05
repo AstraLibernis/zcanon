@@ -77,6 +77,7 @@ pub const Id = enum {
     r012_arity,
     r013_unknown_std,
     r014_positional_stdio,
+    r015_big_undefined,
 };
 
 /// Every rule lives here. Adding one means adding a table entry and a `find` site — nothing
@@ -164,6 +165,13 @@ pub const rules = std.enums.directEnumArray(Id, Rule, 0, .{
         .sev = .warn,
         .msg = "stdout()/stderr().writer() writes at file offsets: redirected to a file, each run starts at byte 0 and `{ a; b; } > out` loses a's output. Use .writerStreaming().",
         .premise = "File.writer defaults to positional writes; writerStreaming appends",
+    },
+    .r015_big_undefined = .{
+        .group = .structural,
+        .code = "R015",
+        .sev = .info,
+        .msg = "large `= undefined` array on the stack (>= 64 KiB): Debug and ReleaseSafe write 0xAA over all of it on every call, and the frame costs a stack probe in every mode. Harmless in a function called once; in one called per row, node or round, size it to need or allocate it once outside the loop.",
+        .premise = "safe modes fill undefined memory with 0xAA; a large frame is probed page by page",
     },
 });
 
@@ -362,6 +370,9 @@ pub const Opts = struct {
     /// shows the API is back. Advice derived from a literal going stale is the failure this
     /// whole integration exists to prevent.
     stale: []const Id = &.{},
+    /// Lets R015 follow an array length into an imported file (`[data.max_bins]T`). Without it,
+    /// only lengths defined in the scanned file are resolved.
+    io: ?std.Io = null,
 };
 
 pub fn scanWithOpts(
@@ -399,6 +410,7 @@ pub fn scanWithOpts(
     defer tree.deinit(gpa);
     if (tree.errors.len == 0) {
         try scanAcquire(gpa, st, &tree, t);
+        try scanBigUndefined(gpa, st, &tree, t, opts.io);
         if (opts.ran_structural) |flag| flag.* = true;
     }
 
@@ -712,6 +724,157 @@ fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t:
         if (!released) try st.emit(a.off, .r008_acquire);
     }
 }
+
+/// R015 fires at this many bytes. Below it the fill and the probe are noise next to a call.
+const big_undefined_bytes: u64 = 64 << 10;
+/// For an element type whose size cannot be read here (a struct), fire at this many elements:
+/// a struct of 16+ bytes makes it 64 KiB, and few hot-path structs are smaller.
+const big_undefined_elems: u64 = 4096;
+
+/// R015 (advisory): `var x: [N]T = undefined` inside a function, where N * @sizeOf(T) is large.
+/// Advisory because the cost depends on how often the function runs, which syntax cannot show:
+/// on its first run it flagged 22 such arrays across these projects, nearly all 64 KiB I/O
+/// buffers in once-per-command functions, and 10 in Zig's std. Debug and
+/// ReleaseSafe fill undefined memory with 0xAA on every call, and a big frame is probed a page at
+/// a time in every mode. Found in zarbor (2026-10-05): a 1 MB `[data.max_bins]CatKey` scratch in
+/// `bestSplit`, filled per node though its search was off by default, made ReleaseSafe 12x
+/// slower. N is evaluated from literals, `*`/`+`, constants in this file or (with `io`) one
+/// imported file, and `std.math.maxInt(uN)`; T from integer/float primitives and aliases of
+/// them. Anything else is left unjudged rather than guessed.
+fn scanBigUndefined(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t: []const Tk, io: ?std.Io) !void {
+    const spans = try fnSpans(gpa, tree);
+    defer gpa.free(spans);
+    var ev: SizeEval = .{ .gpa = gpa, .io = io, .dir = std.fs.path.dirname(st.path) orelse "." };
+    for (0..tree.nodes.len) |i| {
+        const node: std.zig.Ast.Node.Index = @enumFromInt(i);
+        const decl = tree.fullVarDecl(node) orelse continue;
+        const init_node = decl.ast.init_node.unwrap() orelse continue;
+        if (tree.nodeTag(init_node) != .identifier or !eq(tree.tokenSlice(tree.nodeMainToken(init_node)), "undefined")) continue;
+        const type_node = decl.ast.type_node.unwrap() orelse continue;
+        const arr = tree.fullArrayType(type_node) orelse continue;
+        const name_tok = decl.ast.mut_token + 1;
+        if (name_tok >= t.len) continue;
+        // A container-level array is not on the stack and is not refilled per call.
+        if (enclosing(spans, name_tok) == null) continue;
+
+        const n = ev.int(tree, arr.ast.elem_count, 0) orelse continue;
+        const big = if (ev.size(tree, arr.ast.elem_type, 0)) |sz|
+            n *| sz >= big_undefined_bytes
+        else
+            n >= big_undefined_elems;
+        if (big) try st.emit(t[name_tok].start, .r015_big_undefined);
+    }
+}
+
+/// Integer constants and type sizes, as far as the syntax shows them (see R015).
+const SizeEval = struct {
+    gpa: std.mem.Allocator,
+    io: ?std.Io,
+    /// Directory of the scanned file: imports are relative to it.
+    dir: []const u8,
+
+    const Ast = std.zig.Ast;
+    const max_depth = 8;
+
+    fn int(e: *SizeEval, tree: *const Ast, node: Ast.Node.Index, depth: u8) ?u64 {
+        if (depth > max_depth) return null;
+        switch (tree.nodeTag(node)) {
+            .number_literal => return std.fmt.parseInt(u64, tree.tokenSlice(tree.nodeMainToken(node)), 0) catch null,
+            .identifier => {
+                const init = rootConst(tree, tree.tokenSlice(tree.nodeMainToken(node))) orelse return null;
+                return e.int(tree, init, depth + 1);
+            },
+            .mul, .add => {
+                const lr = tree.nodeData(node).node_and_node;
+                const a = e.int(tree, lr[0], depth + 1) orelse return null;
+                const b = e.int(tree, lr[1], depth + 1) orelse return null;
+                return if (tree.nodeTag(node) == .mul) a *| b else a +| b;
+            },
+            .field_access => {
+                const lt = tree.nodeData(node).node_and_token;
+                const field = tree.tokenSlice(lt[1]);
+                return e.inImport(tree, lt[0], field, depth);
+            },
+            .call_one, .call_one_comma, .call, .call_comma => {
+                var buf: [1]Ast.Node.Index = undefined;
+                const call = tree.fullCall(&buf, node) orelse return null;
+                if (call.ast.params.len != 1) return null;
+                const callee = tree.tokenSlice(tree.lastToken(call.ast.fn_expr));
+                if (!eq(callee, "maxInt")) return null;
+                const it = intType(tree, call.ast.params[0], depth + 1) orelse return null;
+                const bits = if (it.signed) it.bits - 1 else it.bits;
+                if (bits >= 64) return std.math.maxInt(u64);
+                return (@as(u64, 1) << @intCast(bits)) - 1; // zsnag:ok — bits < 64, checked above
+            },
+            else => return null,
+        }
+    }
+
+    /// `X.field` where `X` is `@import("file.zig")` in `tree`: the value of that file's `field`.
+    fn inImport(e: *SizeEval, tree: *const Ast, lhs: Ast.Node.Index, field: []const u8, depth: u8) ?u64 {
+        const io = e.io orelse return null;
+        if (tree.nodeTag(lhs) != .identifier) return null;
+        const init = rootConst(tree, tree.tokenSlice(tree.nodeMainToken(lhs))) orelse return null;
+        const rel = importPath(tree, init) orelse return null;
+        if (!std.mem.endsWith(u8, rel, ".zig")) return null; // a package, not a file beside us
+        const path = std.fs.path.join(e.gpa, &.{ e.dir, rel }) catch return null;
+        defer e.gpa.free(path);
+        const src = std.Io.Dir.cwd().readFileAllocOptions(io, path, e.gpa, .limited(16 << 20), .of(u8), 0) catch return null;
+        defer e.gpa.free(src);
+        var other = Ast.parse(e.gpa, src, .zig) catch return null;
+        defer other.deinit(e.gpa);
+        const value = rootConst(&other, field) orelse return null;
+        // Its own constants resolve within it; its imports are relative to it, but one hop is
+        // enough for the shapes this rule targets, so `io` stops here.
+        var inner: SizeEval = .{ .gpa = e.gpa, .io = null, .dir = e.dir };
+        return inner.int(&other, value, depth + 1);
+    }
+
+    /// Bytes of one element, for integer/float/bool primitives and aliases of them.
+    fn size(e: *SizeEval, tree: *const Ast, node: Ast.Node.Index, depth: u8) ?u64 {
+        _ = e;
+        if (intType(tree, node, depth)) |it| return (it.bits + 7) / 8;
+        return null;
+    }
+
+    const IntType = struct { bits: u16, signed: bool };
+
+    fn intType(tree: *const Ast, node: Ast.Node.Index, depth: u8) ?IntType {
+        if (depth > max_depth or tree.nodeTag(node) != .identifier) return null;
+        const name = tree.tokenSlice(tree.nodeMainToken(node));
+        if (eq(name, "bool")) return .{ .bits = 8, .signed = false };
+        if (eq(name, "usize") or eq(name, "isize")) return .{ .bits = 64, .signed = name[0] == 'i' };
+        if (name.len >= 2 and (name[0] == 'u' or name[0] == 'i' or name[0] == 'f')) {
+            if (std.fmt.parseInt(u16, name[1..], 10)) |bits| {
+                return .{ .bits = bits, .signed = name[0] != 'u' };
+            } else |_| {}
+        }
+        const init = rootConst(tree, name) orelse return null;
+        return intType(tree, init, depth + 1);
+    }
+
+    /// The initializer of the container-level `const name = …` in `tree`, if any.
+    fn rootConst(tree: *const Ast, name: []const u8) ?Ast.Node.Index {
+        for (tree.rootDecls()) |d| {
+            const decl = tree.fullVarDecl(d) orelse continue;
+            if (!eq(tree.tokenSlice(decl.ast.mut_token), "const")) continue;
+            if (!eq(tree.tokenSlice(decl.ast.mut_token + 1), name)) continue;
+            return decl.ast.init_node.unwrap();
+        }
+        return null;
+    }
+
+    /// The path in `@import("path")`, without quotes.
+    fn importPath(tree: *const Ast, node: Ast.Node.Index) ?[]const u8 {
+        var buf: [2]Ast.Node.Index = undefined;
+        const params = tree.builtinCallParams(&buf, node) orelse return null;
+        if (!eq(tree.tokenSlice(tree.nodeMainToken(node)), "@import") or params.len != 1) return null;
+        if (tree.nodeTag(params[0]) != .string_literal) return null;
+        const lit = tree.tokenSlice(tree.nodeMainToken(params[0]));
+        if (lit.len < 2) return null;
+        return lit[1 .. lit.len - 1];
+    }
+};
 
 /// R006: a `stream()` result compared `== 0` and then broken out of (heuristic).
 fn scanStreamZero(st: Scanner, t: []const Tk) !void {
