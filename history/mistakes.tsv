@@ -1,4 +1,8 @@
 rule	severity	count	first_ts	last_ts	project	pattern
+R007	info	157	2026-09-28 17:10:55	2026-10-05 17:48:09	-	this cast can panic/corrupt if out of range; verify first.
+compile	error	2	2026-09-30 20:02:03	2026-10-05 13:56:56	-	'…' is not marked '…'
+compile	error	13	2026-09-30 15:45:23	2026-10-05 13:56:56	-	unable to load '…': FileNotFound
+ast-check	error	19	2026-09-28 17:26:55	2026-10-05 17:02:08	zarbor	use of undeclared identifier '…'
 ast-check	info	8	2026-09-28 17:18:59	2026-10-02 11:04:17	zcanon	declared here
 ast-check	error	9	2026-09-28 18:16:30	2026-10-02 11:04:17	zcanon	local constant shadows declaration of '…'
 ast-check	error	15	2026-09-28 17:26:55	2026-10-02 11:25:18	zcanon	use of undeclared identifier '…'
@@ -11,12 +15,13 @@ R011	warn	2	2026-09-28 19:26:26	2026-10-02 12:24:01	zmural	`std.fs.max_path_byte
 R011	warn	4	2026-09-28 17:26:14	2026-09-28 17:26:14	zmural	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
 R011	warn	1	2026-09-28 18:53:20	2026-09-28 18:53:20	zmural	`std.mem.lastIndexOfScalar` is deprecated — the map says: use `findScalarLast`.
 R011	warn	1	2026-10-02 11:50:10	2026-10-02 11:50:10	zmural	`std.unicode.utf8Decode` is deprecated — the map says: Deprecated. This function has an awkward API that is too easy to use incorrectly.
+R015	info	4	2026-10-05 18:28:33	2026-10-05 18:29:38	zmural	large `= undefined` array on the stack (>= 64 KiB): Debug and ReleaseSafe write 0xAA over all of it on every call, and the frame costs a stack probe in every mode. Harmless in a function called once; in one called per row, node or round, size it to need or allocate it once outside the loop.
 ast-check	info	1	2026-09-28 17:18:59	2026-09-28 17:18:59	zmural	also declared here
 ast-check	error	1	2026-09-28 17:18:59	2026-09-28 17:18:59	zmural	ambiguous reference
 ast-check	error	1	2026-09-28 18:16:25	2026-09-28 18:16:25	zmural	declarations are not allowed between container fields
 ast-check	info	1	2026-09-30 15:44:47	2026-09-30 15:44:47	zmural	duplicate name here
 ast-check	error	1	2026-09-30 15:44:47	2026-09-30 15:44:47	zmural	duplicate struct member name '…'
-ast-check	error	5	2026-09-28 20:05:22	2026-10-02 12:48:49	zmural	expected expression, found '…'
+ast-check	error	6	2026-09-28 20:05:22	2026-10-05 19:26:09	zmural	expected expression, found '…'
 ast-check	error	1	2026-09-30 11:07:32	2026-09-30 11:07:32	zmural	expected statement, found '…'
 ast-check	info	1	2026-09-28 18:16:25	2026-09-28 18:16:25	zmural	field after declarations here
 ast-check	info	1	2026-09-28 18:16:25	2026-09-28 18:16:25	zmural	field before declarations here
