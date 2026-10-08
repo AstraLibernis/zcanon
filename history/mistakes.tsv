@@ -6,7 +6,29 @@ R011	warn	4	2026-10-06 17:43:05	2026-10-06 17:43:05	kaggle	`std.StringArrayHashM
 R011	warn	6	2026-09-28 17:26:14	2026-10-06 20:04:28	kaggle	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
 R011	warn	1	2026-10-06 17:43:05	2026-10-06 17:43:05	kaggle	`std.mem.indexOf` is deprecated — the map says: use `find`.
 ast-check	error	1	2026-10-06 17:39:55	2026-10-06 17:39:55	kaggle	expected block, found '…'
-ast-check	error	19	2026-09-28 17:26:55	2026-10-05 17:02:08	zarbor	use of undeclared identifier '…'
+R004	warn	6	2026-09-28 18:32:01	2026-10-07 20:19:31	zarbor	catch unreachable crashes in release if it ever fails; handle the error.
+R007	info	295	2026-09-28 17:10:55	2026-10-07 20:26:23	zarbor	this cast can panic/corrupt if out of range; verify first.
+R010	info	8	2026-10-07 12:26:54	2026-10-07 19:00:23	zarbor	debug.print left in code? remove or use std.log.
+R011	warn	3	2026-10-06 17:43:05	2026-10-07 18:32:49	zarbor	`std.mem.indexOf` is deprecated — the map says: use `find`.
+R015	info	6	2026-10-05 18:28:33	2026-10-07 12:56:19	zarbor	large `= undefined` array on the stack (>= 64 KiB): Debug and ReleaseSafe write 0xAA over all of it on every call, and the frame costs a stack probe in every mode. Harmless in a function called once; in one called per row, node or round, size it to need or allocate it once outside the loop.
+ast-check	error	1	2026-10-07 18:21:01	2026-10-07 18:21:01	zarbor	capture '…' shadows local constant from outer scope
+ast-check	info	1	2026-10-07 17:50:18	2026-10-07 17:50:18	zarbor	consider using '…'
+ast-check	info	13	2026-09-28 17:18:59	2026-10-07 20:51:55	zarbor	declared here
+ast-check	error	1	2026-10-07 20:19:31	2026-10-07 20:19:31	zarbor	expected '…' after statement
+ast-check	error	1	2026-10-07 13:38:18	2026-10-07 13:38:18	zarbor	expected '…' or '…' after statement
+ast-check	error	8	2026-09-28 20:05:22	2026-10-07 18:32:03	zarbor	expected expression, found '…'
+ast-check	error	13	2026-09-28 18:16:30	2026-10-07 20:51:55	zarbor	local constant shadows declaration of '…'
+ast-check	error	1	2026-10-07 17:50:18	2026-10-07 17:50:18	zarbor	local variable is never mutated
+ast-check	info	2	2026-10-07 12:02:38	2026-10-07 18:21:01	zarbor	previous declaration here
+ast-check	error	1	2026-10-07 12:02:38	2026-10-07 12:02:38	zarbor	redeclaration of local constant '…'
+ast-check	error	27	2026-09-28 17:26:55	2026-10-07 12:22:33	zarbor	use of undeclared identifier '…'
+compile	error	4	2026-09-28 19:28:39	2026-10-07 12:56:19	zarbor	expected type '…', found '…'
+compile	error	5	2026-09-28 19:44:41	2026-10-07 20:51:55	zarbor	local constant shadows declaration of '…'
+compile	error	2	2026-09-28 16:56:41	2026-10-07 17:50:18	zarbor	local variable is never mutated
+compile	error	1	2026-10-07 20:51:55	2026-10-07 20:51:55	zarbor	missing struct field: tables
+compile	error	1	2026-10-07 20:13:19	2026-10-07 20:13:19	zarbor	no field or member function named '…' in '…'
+compile	error	3	2026-09-30 15:45:23	2026-10-07 17:50:18	zarbor	root source file struct '…' has no member named '…'
+compile	error	3	2026-09-30 14:06:53	2026-10-07 13:02:41	zarbor	switch must handle all possibilities
 ast-check	info	8	2026-09-28 17:18:59	2026-10-02 11:04:17	zcanon	declared here
 ast-check	error	9	2026-09-28 18:16:30	2026-10-02 11:04:17	zcanon	local constant shadows declaration of '…'
 ast-check	error	15	2026-09-28 17:26:55	2026-10-02 11:25:18	zcanon	use of undeclared identifier '…'
