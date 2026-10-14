@@ -85,7 +85,7 @@ compile	error	3	2026-09-30 14:29:05	2026-09-30 14:29:05	zmural	member function e
 compile	error	2	2026-09-28 18:18:15	2026-10-06 14:16:54	zmural	no field named '…' in struct '…'
 compile	error	2	2026-09-30 15:57:52	2026-09-30 15:57:52	zmural	no module named '…' available within module '…'
 compile	error	4	2026-09-30 15:45:23	2026-10-12 17:55:39	zmural	root source file struct '…' has no member named '…'
-compile	error	8	2026-09-30 14:06:53	2026-10-12 17:57:25	zmural	switch must handle all possibilities
+compile	error	13	2026-09-30 14:06:53	2026-10-13 15:13:35	zmural	switch must handle all possibilities
 compile	error	5	2026-09-30 15:45:23	2026-09-30 15:57:52	zmural	unable to load '…': FileNotFound
 compile	error	2	2026-09-28 19:59:25	2026-09-28 20:06:38	zmural	unable to open '…': FileNotFound
 compile	error	1	2026-09-30 14:38:07	2026-09-30 14:38:07	zmural	unreachable else prong; all cases already handled
@@ -99,3 +99,11 @@ ast-check	error	2	2026-09-30 15:44:47	2026-10-06 18:11:50	zscour	duplicate struc
 ast-check	error	2	2026-10-06 14:07:19	2026-10-06 19:20:18	zscour	expected '…' after initializer
 ast-check	info	2	2026-09-30 15:44:47	2026-10-06 18:11:50	zscour	struct declared here
 compile	error	1	2026-10-06 18:11:50	2026-10-06 18:11:50	zscour	duplicate struct member name '…'
+R004	warn	9	2026-09-28 18:32:01	2026-10-13 17:12:35	zvklab	catch unreachable crashes in release if it ever fails; handle the error.
+R007	info	416	2026-09-28 17:10:55	2026-10-14 11:32:52	zvklab	this cast can panic/corrupt if out of range; verify first.
+R010	info	19	2026-10-07 12:26:54	2026-10-14 11:32:26	zvklab	debug.print left in code? remove or use std.log.
+R011	warn	9	2026-09-28 17:26:14	2026-10-14 11:21:06	zvklab	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
+ast-check	info	1	2026-10-13 18:54:09	2026-10-13 18:54:09	zvklab	consider using @"i0" to disambiguate
+ast-check	info	17	2026-09-28 17:18:59	2026-10-13 17:44:50	zvklab	declared here
+ast-check	error	6	2026-09-28 18:16:30	2026-10-13 17:44:50	zvklab	function parameter shadows declaration of '…'
+ast-check	error	1	2026-10-13 18:54:09	2026-10-13 18:54:09	zvklab	name shadows primitive '…'
