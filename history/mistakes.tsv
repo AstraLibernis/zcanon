@@ -1,6 +1,7 @@
 rule	severity	count	first_ts	last_ts	project	pattern
 R007	info	157	2026-09-28 17:10:55	2026-10-05 17:48:09	-	this cast can panic/corrupt if out of range; verify first.
-R010	info	13	2026-10-07 12:26:54	2026-10-12 12:08:56	-	debug.print left in code? remove or use std.log.
+R010	info	35	2026-10-07 12:26:54	2026-10-16 11:21:50	-	debug.print left in code? remove or use std.log.
+ast-check	error	2	2026-10-15 17:17:58	2026-10-16 11:24:31	-	expected '…', found '…'
 compile	error	2	2026-09-30 20:02:03	2026-10-05 13:56:56	-	'…' is not marked '…'
 compile	error	13	2026-09-30 15:45:23	2026-10-05 13:56:56	-	unable to load '…': FileNotFound
 R007	info	492	2026-09-28 17:10:55	2026-10-15 12:02:29	kaggle	this cast can panic/corrupt if out of range; verify first.
@@ -103,14 +104,24 @@ ast-check	error	2	2026-09-30 15:44:47	2026-10-06 18:11:50	zscour	duplicate struc
 ast-check	error	2	2026-10-06 14:07:19	2026-10-06 19:20:18	zscour	expected '…' after initializer
 ast-check	info	2	2026-09-30 15:44:47	2026-10-06 18:11:50	zscour	struct declared here
 compile	error	1	2026-10-06 18:11:50	2026-10-06 18:11:50	zscour	duplicate struct member name '…'
+R005	warn	6	2026-09-28 17:23:06	2026-10-15 17:17:58	zstrata	empty catch {} silently swallows an error.
+R009	info	12	2026-10-02 12:34:24	2026-10-15 17:22:13	zstrata	page_allocator as a general allocator is slow; pass an allocator in.
+R011	warn	6	2026-10-06 17:43:05	2026-10-15 17:55:46	zstrata	`std.StringArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.String`.
+R011	warn	10	2026-09-28 17:26:14	2026-10-15 17:24:59	zstrata	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
 R004	warn	9	2026-09-28 18:32:01	2026-10-13 17:12:35	zvklab	catch unreachable crashes in release if it ever fails; handle the error.
-R007	info	416	2026-09-28 17:10:55	2026-10-14 11:32:52	zvklab	this cast can panic/corrupt if out of range; verify first.
+R007	info	546	2026-09-28 17:10:55	2026-10-16 12:15:59	zvklab	this cast can panic/corrupt if out of range; verify first.
 R010	info	19	2026-10-07 12:26:54	2026-10-14 11:32:26	zvklab	debug.print left in code? remove or use std.log.
 R011	warn	9	2026-09-28 17:26:14	2026-10-14 11:21:06	zvklab	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
 R011	warn	5	2026-10-06 17:43:05	2026-10-14 19:03:50	zvklab	`std.mem.indexOf` is deprecated — the map says: use `find`.
 ast-check	info	1	2026-10-13 18:54:09	2026-10-13 18:54:09	zvklab	consider using @"i0" to disambiguate
-ast-check	info	17	2026-09-28 17:18:59	2026-10-13 17:44:50	zvklab	declared here
+ast-check	info	18	2026-09-28 17:18:59	2026-10-16 11:26:28	zvklab	declared here
+ast-check	error	1	2026-10-16 12:06:28	2026-10-16 12:06:28	zvklab	expected '…' after argument
 ast-check	error	6	2026-09-28 18:16:30	2026-10-13 17:44:50	zvklab	function parameter shadows declaration of '…'
+ast-check	error	1	2026-10-16 11:26:24	2026-10-16 11:26:24	zvklab	local constant '…' shadows function parameter from outer scope
+ast-check	error	3	2026-09-30 14:08:04	2026-10-16 11:26:28	zvklab	local variable shadows declaration of '…'
 ast-check	error	1	2026-10-13 18:54:09	2026-10-13 18:54:09	zvklab	name shadows primitive '…'
-ast-check	error	3	2026-09-28 17:26:28	2026-10-14 18:37:25	zvklab	unused local constant
-ast-check	error	42	2026-09-28 17:26:55	2026-10-14 18:37:20	zvklab	use of undeclared identifier '…'
+ast-check	info	6	2026-10-07 12:02:38	2026-10-16 11:26:24	zvklab	previous declaration here
+ast-check	error	9	2026-09-28 17:26:28	2026-10-16 12:15:19	zvklab	unused function parameter
+ast-check	error	4	2026-09-28 17:26:28	2026-10-16 12:20:18	zvklab	unused local constant
+ast-check	error	49	2026-09-28 17:26:55	2026-10-16 12:16:15	zvklab	use of undeclared identifier '…'
+compile	error	5	2026-09-28 19:28:39	2026-10-16 12:15:59	zvklab	expected type '…', found '…'
