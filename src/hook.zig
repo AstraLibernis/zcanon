@@ -294,14 +294,14 @@ const SHORT_LINES = 6;
 /// with `.full`, `zcanon check --full`) prints every message.
 fn renderShort(arena: std.mem.Allocator, base: []const u8, file: []const u8, findings: []const Finding) ![]const u8 {
     var counts: [4]usize = @splat(0);
-    for (findings) |f| counts[@intFromEnum(tier.classify(f.severity, file))] += 1;
+    for (findings) |f| counts[@backingInt(tier.classify(f.severity, file))] += 1;
 
     var w: std.Io.Writer.Allocating = .init(arena);
     try w.writer.print("zcanon: {s} —", .{base});
     var sep: []const u8 = " ";
     for (counts, 0..) |n, t| {
         if (n == 0) continue;
-        try w.writer.print("{s}{d} {s}", .{ sep, n, @as(tier.Tier, @enumFromInt(t)).key() });
+        try w.writer.print("{s}{d} {s}", .{ sep, n, @as(tier.Tier, @fromBackingInt(@intCast(t))).key() });
         sep = ", ";
     }
 
@@ -317,7 +317,7 @@ fn renderShort(arena: std.mem.Allocator, base: []const u8, file: []const u8, fin
     }
 
     for ([_]tier.Tier{ .advisory, .expected }) |t| {
-        if (counts[@intFromEnum(t)] == 0) continue;
+        if (counts[@backingInt(t)] == 0) continue;
         try w.writer.print("\n{s} {s}:", .{ t.mark(), if (t == .advisory) "advisory" else "expected (test/bench code)" });
         var entry_sep: []const u8 = " ";
         // One entry per rule, in order of first appearance.
@@ -346,7 +346,7 @@ fn renderShort(arena: std.mem.Allocator, base: []const u8, file: []const u8, fin
             }
         }
     }
-    if (counts[@intFromEnum(tier.Tier.advisory)] + counts[@intFromEnum(tier.Tier.expected)] > 0)
+    if (counts[@backingInt(tier.Tier.advisory)] + counts[@backingInt(tier.Tier.expected)] > 0)
         try w.writer.print("\nfull messages: zcanon check --full {s}", .{file});
     return w.written();
 }

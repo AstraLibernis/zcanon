@@ -509,7 +509,7 @@ pub fn serve(parent: vars.Ctx, root: []const u8) !void {
         // Orphans of the compiler watcher (the build runner, the compiler) are re-parented to
         // us rather than to PID 1, so `reapOrphans` can collect them. A container whose PID 1
         // never reaps would otherwise keep them as zombies.
-        _ = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_CHILD_SUBREAPER), 1, 0, 0, 0);
+        _ = std.os.linux.prctl(@backingInt(std.os.linux.PR.SET_CHILD_SUBREAPER), 1, 0, 0, 0);
     }
     // Long-lived, multi-threaded state: a thread-safe allocator, not the per-run arena.
     const c: vars.Ctx = .{ .gpa = std.heap.smp_allocator, .io = parent.io, .env = parent.env };

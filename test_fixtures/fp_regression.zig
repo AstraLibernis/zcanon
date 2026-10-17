@@ -4,7 +4,7 @@ const std = @import("std");
 
 fn methodsNamedAsyncAwait(wg: anytype, io: anytype) !void {
     wg.async(io, .{}); // method named `async` — NOT the removed keyword (no R001)
-    try wg.await(io);  // method named `await` — NOT the removed keyword (no R001)
+    try wg.await(io); // method named `await` — NOT the removed keyword (no R001)
 }
 
 fn noDeinitNeeded() void {

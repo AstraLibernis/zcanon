@@ -176,7 +176,7 @@ pub const rules = std.enums.directEnumArray(Id, Rule, 0, .{
 });
 
 pub fn ruleOf(id: Id) Rule {
-    return rules[@intFromEnum(id)];
+    return rules[@backingInt(id)];
 }
 
 pub const Finding = struct {
@@ -525,7 +525,7 @@ fn isTypeDefinition(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool
 fn fnSpans(gpa: std.mem.Allocator, tree: *const std.zig.Ast) ![]Span {
     var spans: std.ArrayList(Span) = .empty;
     for (0..tree.nodes.len) |i| {
-        const node: std.zig.Ast.Node.Index = @enumFromInt(i);
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i));
         // Test bodies are function bodies too: a leak in a test is still a leak.
         if (tree.nodeTag(node) != .fn_decl and tree.nodeTag(node) != .test_decl) continue;
         try spans.append(gpa, .{ .first = tree.firstToken(node), .last = tree.lastToken(node) });
@@ -662,7 +662,7 @@ fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t:
     // `const T = struct { … }` the span was the whole struct body, and in `fn f(s: []const u8)`
     // the `const` inside the type bound to `u8` and swallowed the function body.
     for (0..tree.nodes.len) |i| {
-        const node: std.zig.Ast.Node.Index = @enumFromInt(i);
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i));
         const decl = tree.fullVarDecl(node) orelse continue;
         const init_node = decl.ast.init_node.unwrap() orelse continue;
         if (isTypeDefinition(tree, init_node)) continue;
@@ -746,7 +746,7 @@ fn scanBigUndefined(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.As
     defer gpa.free(spans);
     var ev: SizeEval = .{ .gpa = gpa, .io = io, .dir = std.fs.path.dirname(st.path) orelse "." };
     for (0..tree.nodes.len) |i| {
-        const node: std.zig.Ast.Node.Index = @enumFromInt(i);
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i));
         const decl = tree.fullVarDecl(node) orelse continue;
         const init_node = decl.ast.init_node.unwrap() orelse continue;
         if (tree.nodeTag(init_node) != .identifier or !eq(tree.tokenSlice(tree.nodeMainToken(init_node)), "undefined")) continue;
