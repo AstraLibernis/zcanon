@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     // ReleaseSafe by default, not Debug: the hook runs on every edit, and the installed binary
     // is whatever plain `zig build` produced. Safety checks stay live. `-Doptimize=Debug` to debug.
-    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "optimization mode (default: ReleaseSafe)") orelse .ReleaseSafe;
+    const optimize = b.option(std.builtin.Optimize, "optimize", "optimization mode (default: safe)") orelse .safe;
 
     // zsnag: the LLM-footgun linter — written in Zig (the project dogfoods itself).
     // (std discovery/lookup — zlook/zmap — moved to zephem, which owns the std map.)
@@ -79,21 +79,21 @@ pub fn build(b: *std.Build) void {
     // The install prefix comes in as a build option rather than an env var: the tests need it
     // before they spawn anything, and reading the ambient environment from a test is awkward.
     const cli_opts = b.addOptions();
-    cli_opts.addOption([]const u8, "bin_dir", b.getInstallPath(.bin, ""));
+    cli_opts.addOptionPathUntracked("bin_dir", .{ .relative = .{ .base = .install_bin } });
     // The child needs PATH to find `zig` for ast-check. A test process cannot read the
     // ambient environment on posix (Environ.Block is a slice with no global accessor), so it
     // comes through here, where the build graph does have it.
     cli_opts.addOption([]const u8, "path_env", b.graph.environ_map.get("PATH") orelse "");
     // `zig build` run by the tests (add-check, the daemon's compiler) needs a global cache, and
     // the tests' environment has no HOME to derive one from.
-    cli_opts.addOption([]const u8, "zig_global_cache", b.graph.global_cache_root.path orelse "");
+    cli_opts.addOptionPathUntracked("zig_global_cache", .{ .relative = .{ .base = .global_cache } });
     cli_opts.addOption([]const u8, "zephem_home", b.graph.environ_map.get("ZEPHEM_HOME") orelse "");
     // The setup tests need zephem's lookup table: $ZEPHEM_LOOKUP, else inside $ZEPHEM_HOME,
     // else inside a zephem checkout beside this one. Missing → those tests skip, not fail.
     const lookup: []const u8 = b.graph.environ_map.get("ZEPHEM_LOOKUP") orelse if (b.graph.environ_map.get("ZEPHEM_HOME")) |zh|
         b.pathJoin(&.{ zh, "data", "lookup.tsv" })
     else
-        b.pathFromRoot("../zephem/data/lookup.tsv");
+        b.root.joinString(b.allocator, "../zephem/data/lookup.tsv") catch @panic("OOM");
     cli_opts.addOption([]const u8, "zephem_lookup", lookup);
     cli_mod.addOptions("build_options", cli_opts);
 

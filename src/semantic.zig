@@ -246,7 +246,7 @@ pub const AddCheckError = error{
 /// by text search, so a comment or string that looks like `fn build` cannot misplace it.
 pub fn addCheck(gpa: std.mem.Allocator, src: [:0]const u8) AddCheckError![]u8 {
     if (std.mem.find(u8, src, marker) != null) return error.AlreadyAdded;
-    var tree = try std.zig.Ast.parse(gpa, src, .zig);
+    var tree = try std.zig.Ast.parse(gpa, src, .{});
     defer tree.deinit(gpa);
     if (tree.errors.len != 0) return error.BuildZigInvalid;
 

@@ -493,7 +493,7 @@ const Daemon = struct {
 fn reapOrphans(io: std.Io) void {
     if (builtin.os.tag != .linux) return;
     for (0..20) |_| {
-        var status: u32 = 0;
+        var status: i32 = 0;
         while (true) {
             const rc: isize = @bitCast(std.os.linux.waitpid(-1, &status, std.os.linux.W.NOHANG));
             if (rc <= 0) break;

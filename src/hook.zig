@@ -190,14 +190,13 @@ fn strField(o: std.json.ObjectMap, name: []const u8) ?[]const u8 {
 pub const AstCheckError = std.mem.Allocator.Error || std.Io.Writer.Error;
 
 pub fn astCheck(gpa: std.mem.Allocator, path: []const u8, src: [:0]const u8) AstCheckError![]const u8 {
-    var tree = try std.zig.Ast.parse(gpa, src, .zig);
+    var tree = try std.zig.Ast.parse(gpa, src, .{});
     defer tree.deinit(gpa);
     var zir = try std.zig.AstGen.generate(gpa, tree);
     defer zir.deinit(gpa);
     if (!zir.hasCompileErrors()) return "";
 
-    var wip: std.zig.ErrorBundle.Wip = undefined;
-    try wip.init(gpa);
+    var wip: std.zig.ErrorBundle.Wip = try .init(gpa);
     defer wip.deinit();
     try wip.addZirErrorMessages(zir, tree, src, path);
     var eb = try wip.toOwnedBundle("");

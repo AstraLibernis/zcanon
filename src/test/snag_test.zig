@@ -30,7 +30,7 @@ fn has(list: []const []const u8, code: []const u8) bool {
 /// rule never ran. That is how `var l = …init(gpa); defer l.deinit();` silently became a
 /// no-op test: `defer` is not legal at file scope. Any AST-rule test must go through here.
 fn codesParsed(gpa: std.mem.Allocator, src: [:0]const u8) ![]const []const u8 {
-    var tree = try std.zig.Ast.parse(gpa, src, .zig);
+    var tree = try std.zig.Ast.parse(gpa, src, .{});
     defer tree.deinit(gpa);
     if (tree.errors.len > 0) return error.TestSourceDoesNotParse;
     return codes(gpa, src);
@@ -315,7 +315,7 @@ test "more than 32 allow codes are all honoured (B4)" {
     for (0..60) |_| try src.appendSlice(a.allocator(), " R999");
     try src.appendSlice(a.allocator(), " R010\n");
     try src.appendSlice(a.allocator(), "std.debug.print(\"a\", .{});\n");
-    const z = try a.allocator().dupeZ(u8, src.items);
+    const z = try a.allocator().dupeSentinel(u8, src.items, 0);
 
     var out: std.ArrayList(snag.Finding) = .empty;
     try scan(a.allocator(), z, &out);

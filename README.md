@@ -50,7 +50,7 @@ candidates for a new zsnag rule or a line in the skill.
 
 ## Install
 
-You need [Zig 0.16.0](https://ziglang.org/download/) on your PATH, and the companion
+You need [Zig 0.17.0](https://ziglang.org/download/) on your PATH, and the companion
 [zephem](https://github.com/AstraLibernis/zephem) cloned **next to** zcanon:
 
 ```sh

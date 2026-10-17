@@ -367,7 +367,8 @@ test "short view: scratch-file advisories collapse under expected" {
 test "short view: a long message is cut, on a UTF-8 boundary, with an ellipsis" {
     var a = arena();
     defer a.deinit();
-    const long = "▲" ** 200; // 600 bytes of three-byte codepoints
+    const long_arr: [200][3]u8 = @splat("▲".*); // 600 bytes of three-byte codepoints
+    const long: []const u8 = std.mem.asBytes(&long_arr);
     const findings = [_]hook.Finding{
         .{ .rule = "R012", .severity = "warn", .line = 1, .col = 1, .message = long },
     };

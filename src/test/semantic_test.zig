@@ -71,9 +71,9 @@ test "addCheck calls the helper from build with build's own parameter name" {
     try testing.expect(call < helper);
     try testing.expect(std.mem.find(u8, out[call..helper], "}") != null);
     // The result is still valid Zig.
-    const z = try testing.allocator.dupeZ(u8, out);
+    const z = try testing.allocator.dupeSentinel(u8, out, 0);
     defer testing.allocator.free(z);
-    var tree = try std.zig.Ast.parse(testing.allocator, z, .zig);
+    var tree = try std.zig.Ast.parse(testing.allocator, z, .{});
     defer tree.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 0), tree.errors.len);
 }
@@ -82,7 +82,7 @@ test "addCheck refuses twice, a broken file, and a file with no build fn" {
     const good = "const std = @import(\"std\");\npub fn build(b: *std.Build) void {\n    _ = b;\n}\n";
     const once = try semantic.addCheck(testing.allocator, good);
     defer testing.allocator.free(once);
-    const z = try testing.allocator.dupeZ(u8, once);
+    const z = try testing.allocator.dupeSentinel(u8, once, 0);
     defer testing.allocator.free(z);
     try testing.expectError(error.AlreadyAdded, semantic.addCheck(testing.allocator, z));
     try testing.expectError(error.BuildZigInvalid, semantic.addCheck(testing.allocator, "pub fn build( {"));
@@ -140,7 +140,7 @@ test "the generated build file is valid Zig and names the targets" {
 
     try semantic.writeWrapper(gpa, io, dir, "/home/u/proj", &.{"x86_64-windows"});
     const build = try std.Io.Dir.cwd().readFileAllocOptions(io, try std.fs.path.join(gpa, &.{ dir, "build.zig" }), gpa, .unlimited, .of(u8), 0);
-    const tree = try std.zig.Ast.parse(gpa, build, .zig);
+    const tree = try std.zig.Ast.parse(gpa, build, .{});
     try testing.expectEqual(@as(usize, 0), tree.errors.len);
     try testing.expect(std.mem.find(u8, build, "\"x86_64-windows\"") != null);
     const zon = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(gpa, &.{ dir, "build.zig.zon" }), gpa, .unlimited);

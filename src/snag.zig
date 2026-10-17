@@ -406,7 +406,7 @@ pub fn scanWithOpts(
     // The structural rules need a parse tree. If the file does not parse, skip them: the
     // compiler's own ast-check will report the syntax error, and heuristics run over a broken
     // parse are noise stacked on top of a real problem.
-    var tree = try std.zig.Ast.parse(gpa, src, .zig);
+    var tree = try std.zig.Ast.parse(gpa, src, .{});
     defer tree.deinit(gpa);
     if (tree.errors.len == 0) {
         try scanAcquire(gpa, st, &tree, t);
@@ -821,7 +821,7 @@ const SizeEval = struct {
         defer e.gpa.free(path);
         const src = std.Io.Dir.cwd().readFileAllocOptions(io, path, e.gpa, .limited(16 << 20), .of(u8), 0) catch return null;
         defer e.gpa.free(src);
-        var other = Ast.parse(e.gpa, src, .zig) catch return null;
+        var other = Ast.parse(e.gpa, src, .{}) catch return null;
         defer other.deinit(e.gpa);
         const value = rootConst(&other, field) orelse return null;
         // Its own constants resolve within it; its imports are relative to it, but one hop is
