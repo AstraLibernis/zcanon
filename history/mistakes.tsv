@@ -1,6 +1,9 @@
 rule	severity	count	first_ts	last_ts	project	pattern
 R007	info	157	2026-09-28 17:10:55	2026-10-05 17:48:09	-	this cast can panic/corrupt if out of range; verify first.
+R009	info	16	2026-10-02 12:34:24	2026-10-17 04:16:39	-	page_allocator as a general allocator is slow; pass an allocator in.
 R010	info	35	2026-10-07 12:26:54	2026-10-16 11:21:50	-	debug.print left in code? remove or use std.log.
+R013	info	2	2026-10-17 04:07:54	2026-10-17 04:10:31	-	`std.fmt.allocPrintZ` is not in the zephem map — cannot verify it exists (check with `zephem look`).
+ast-check	error	3	2026-10-07 20:19:31	2026-10-17 04:16:39	-	expected '…' after statement
 ast-check	error	2	2026-10-15 17:17:58	2026-10-16 11:24:31	-	expected '…', found '…'
 compile	error	2	2026-09-30 20:02:03	2026-10-05 13:56:56	-	'…' is not marked '…'
 compile	error	13	2026-09-30 15:45:23	2026-10-05 13:56:56	-	unable to load '…': FileNotFound
@@ -49,11 +52,14 @@ ast-check	info	8	2026-09-28 17:18:59	2026-10-02 11:04:17	zcanon	declared here
 ast-check	error	9	2026-09-28 18:16:30	2026-10-02 11:04:17	zcanon	local constant shadows declaration of '…'
 ast-check	error	15	2026-09-28 17:26:55	2026-10-02 11:25:18	zcanon	use of undeclared identifier '…'
 compile	error	1	2026-09-28 16:56:41	2026-09-28 16:56:41	zcanon	local variable is never mutated
+R011	warn	11	2026-10-06 17:43:05	2026-10-17 04:30:30	zephem	`std.mem.indexOf` is deprecated — the map says: use `find`.
+R011	warn	2	2026-09-28 18:53:20	2026-10-17 04:50:23	zephem	`std.mem.lastIndexOfScalar` is deprecated — the map says: use `findScalarLast`.
 R004	warn	5	2026-09-28 18:32:01	2026-10-02 12:25:52	zmural	catch unreachable crashes in release if it ever fails; handle the error.
 R005	warn	4	2026-09-28 17:23:06	2026-09-30 20:00:44	zmural	empty catch {} silently swallows an error.
 R007	info	361	2026-09-28 17:10:55	2026-10-12 17:44:07	zmural	this cast can panic/corrupt if out of range; verify first.
 R009	info	1	2026-10-02 12:34:24	2026-10-02 12:34:24	zmural	page_allocator as a general allocator is slow; pass an allocator in.
 R011	warn	1	2026-10-06 14:16:34	2026-10-06 14:16:34	zmural	`std.ascii.indexOfIgnoreCase` is deprecated — the map says: use `findIgnoreCase`.
+R011	warn	1	2026-10-17 05:15:46	2026-10-17 05:15:46	zmural	`std.fmt.bufPrintSentinel` is deprecated — the map says: use `mem.printSentinel`.
 R011	warn	2	2026-09-28 19:26:26	2026-10-02 12:24:01	zmural	`std.fs.max_path_bytes` is deprecated — the map says: use `std.Io.Dir.max_path_bytes`.
 R011	warn	4	2026-09-28 17:26:14	2026-09-28 17:26:14	zmural	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
 R011	warn	1	2026-09-28 18:53:20	2026-09-28 18:53:20	zmural	`std.mem.lastIndexOfScalar` is deprecated — the map says: use `findScalarLast`.
@@ -94,23 +100,42 @@ compile	error	5	2026-09-30 15:45:23	2026-09-30 15:57:52	zmural	unable to load '�
 compile	error	2	2026-09-28 19:59:25	2026-09-28 20:06:38	zmural	unable to open '…': FileNotFound
 compile	error	1	2026-09-30 14:38:07	2026-09-30 14:38:07	zmural	unreachable else prong; all cases already handled
 compile	error	4	2026-09-28 19:50:10	2026-10-12 17:54:18	zmural	use of undeclared identifier '…'
+R011	warn	33	2026-10-17 04:14:39	2026-10-17 05:25:17	zneuro	`std.fmt.allocPrint` is deprecated — the map says: use `Allocator.print`.
+ast-check	error	1	2026-10-16 13:05:49	2026-10-16 13:05:49	zneuro	declaration '…' shadows function parameter from outer scope
+ast-check	info	3	2026-09-30 15:44:47	2026-10-16 13:05:42	zneuro	duplicate name here
+ast-check	error	3	2026-09-30 15:44:47	2026-10-16 13:05:42	zneuro	duplicate struct member name '…'
+ast-check	error	1	2026-10-16 13:06:06	2026-10-16 13:06:06	zneuro	expected '…' after field
+ast-check	error	2	2026-10-07 13:38:18	2026-10-16 13:09:03	zneuro	expected '…' or '…' after statement
+ast-check	info	7	2026-10-07 12:02:38	2026-10-16 13:05:49	zneuro	previous declaration here
+ast-check	info	3	2026-09-30 15:44:47	2026-10-16 13:05:42	zneuro	struct declared here
+ast-check	error	5	2026-09-28 17:26:28	2026-10-16 13:08:11	zneuro	unused local constant
+ast-check	info	1	2026-10-16 13:06:06	2026-10-16 13:06:06	zneuro	use '…' or '…' to declare variable
+ast-check	error	52	2026-09-28 17:26:55	2026-10-16 13:55:03	zneuro	use of undeclared identifier '…'
+compile	error	10	2026-10-17 05:25:17	2026-10-17 05:25:40	zneuro	no field named '…' in enum '…'
+compile	error	5	2026-09-28 18:18:15	2026-10-17 05:25:40	zneuro	no field named '…' in struct '…'
 ast-check	error	1	2026-10-14 13:18:31	2026-10-14 13:18:31	zprism	invalid builtin function: '…'
 R005	warn	5	2026-09-28 17:23:06	2026-10-06 19:10:03	zscour	empty catch {} silently swallows an error.
 R007	info	208	2026-09-28 17:10:55	2026-10-06 19:52:21	zscour	this cast can panic/corrupt if out of range; verify first.
 R009	info	3	2026-10-02 12:34:24	2026-10-06 18:58:44	zscour	page_allocator as a general allocator is slow; pass an allocator in.
 R011	warn	2	2026-10-02 11:50:10	2026-10-06 19:07:48	zscour	`std.unicode.utf8Decode` is deprecated — the map says: Deprecated. This function has an awkward API that is too easy to use incorrectly.
+ast-check	error	2	2026-10-17 05:24:07	2026-10-17 05:24:38	zscour	binary operator '…' has whitespace on one side, but not the other
 ast-check	info	2	2026-09-30 15:44:47	2026-10-06 18:11:50	zscour	duplicate name here
 ast-check	error	2	2026-09-30 15:44:47	2026-10-06 18:11:50	zscour	duplicate struct member name '…'
 ast-check	error	2	2026-10-06 14:07:19	2026-10-06 19:20:18	zscour	expected '…' after initializer
 ast-check	info	2	2026-09-30 15:44:47	2026-10-06 18:11:50	zscour	struct declared here
+compile	error	1	2026-10-17 05:24:38	2026-10-17 05:24:38	zscour	binary operator '…' has whitespace on one side, but not the other
 compile	error	1	2026-10-06 18:11:50	2026-10-06 18:11:50	zscour	duplicate struct member name '…'
 R005	warn	6	2026-09-28 17:23:06	2026-10-15 17:17:58	zstrata	empty catch {} silently swallows an error.
+R007	info	564	2026-09-28 17:10:55	2026-10-17 05:25:17	zstrata	this cast can panic/corrupt if out of range; verify first.
 R009	info	12	2026-10-02 12:34:24	2026-10-15 17:22:13	zstrata	page_allocator as a general allocator is slow; pass an allocator in.
 R011	warn	6	2026-10-06 17:43:05	2026-10-15 17:55:46	zstrata	`std.StringArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.String`.
 R011	warn	10	2026-09-28 17:26:14	2026-10-15 17:24:59	zstrata	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
+compile	error	3	2026-10-08 16:49:59	2026-10-17 05:26:32	zstrata	enum '…' has no member named '…'
+compile	error	11	2026-09-30 15:45:23	2026-10-17 05:25:40	zstrata	root source file struct '…' has no member named '…'
 R004	warn	9	2026-09-28 18:32:01	2026-10-13 17:12:35	zvklab	catch unreachable crashes in release if it ever fails; handle the error.
 R007	info	546	2026-09-28 17:10:55	2026-10-16 12:15:59	zvklab	this cast can panic/corrupt if out of range; verify first.
 R010	info	19	2026-10-07 12:26:54	2026-10-14 11:32:26	zvklab	debug.print left in code? remove or use std.log.
+R011	warn	32	2026-10-17 05:15:46	2026-10-17 05:25:40	zvklab	`std.fmt.bufPrint` is deprecated — the map says: use `mem.print`.
 R011	warn	9	2026-09-28 17:26:14	2026-10-14 11:21:06	zvklab	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
 R011	warn	5	2026-10-06 17:43:05	2026-10-14 19:03:50	zvklab	`std.mem.indexOf` is deprecated — the map says: use `find`.
 ast-check	info	1	2026-10-13 18:54:09	2026-10-13 18:54:09	zvklab	consider using @"i0" to disambiguate
