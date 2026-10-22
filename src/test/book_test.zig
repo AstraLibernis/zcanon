@@ -58,6 +58,30 @@ test "escape round-trips tabs, newlines and backslashes" {
     }
 }
 
+test "escape copies plain runs between specials verbatim" {
+    const gpa = testing.allocator;
+    var w: std.Io.Writer.Allocating = .init(gpa);
+    defer w.deinit();
+    try book.escape(&w.writer, "ab\tcd\\ef\ngh\r");
+    try testing.expectEqualStrings("ab\\tcd\\\\ef\\ngh\\r", w.written());
+}
+
+test "unescape keeps a lone trailing backslash and unknown escapes" {
+    const gpa = testing.allocator;
+    const cases = [_][2][]const u8{
+        .{ "plain", "plain" },
+        .{ "end\\", "end\\" },
+        .{ "a\\xb", "a\\xb" },
+        .{ "pre\\tpost\\\\", "pre\tpost\\" },
+        .{ "\\", "\\" },
+    };
+    for (cases) |c| {
+        const got = try book.unescape(gpa, c[0]);
+        defer gpa.free(got);
+        try testing.expectEqualStrings(c[1], got);
+    }
+}
+
 test "escaped text never contains a raw delimiter" {
     const gpa = testing.allocator;
     var w: std.Io.Writer.Allocating = .init(gpa);

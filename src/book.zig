@@ -75,36 +75,47 @@ fn isActive(group: []const u8, active: []const []const u8) bool {
 pub const header = "first_ts\tlast_ts\thits\tzig_version\tfile\trule\tseverity\tline\tcol\tmessage\tsnippet";
 const n_cols = 11;
 
+/// Bytes `escape` rewrites. Runs between them are copied whole: almost no field has any.
+const specials = "\\\t\n\r";
+
 /// TSV fields must not carry the delimiters. Snippets are raw source lines, so embedded
 /// tabs are normal — escape rather than mangle, and keep it reversible.
 pub fn escape(w: *std.Io.Writer, s: []const u8) !void {
-    for (s) |c| switch (c) {
-        '\\' => try w.writeAll("\\\\"),
-        '\t' => try w.writeAll("\\t"),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        else => try w.writeByte(c),
-    };
+    var start: usize = 0;
+    while (std.mem.findAnyPos(u8, s, start, specials)) |i| {
+        try w.writeAll(s[start..i]);
+        try w.writeAll(switch (s[i]) {
+            '\\' => "\\\\",
+            '\t' => "\\t",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            else => unreachable,
+        });
+        start = i + 1;
+    }
+    try w.writeAll(s[start..]);
 }
 
+/// Caller frees.
 pub fn unescape(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
+    var i = std.mem.findScalar(u8, s, '\\') orelse return gpa.dupe(u8, s);
+    var out: std.ArrayList(u8) = try .initCapacity(gpa, s.len);
     errdefer out.deinit(gpa);
-    var i: usize = 0;
+    out.appendSliceAssumeCapacity(s[0..i]);
     while (i < s.len) : (i += 1) {
         if (s[i] != '\\' or i + 1 >= s.len) {
-            try out.append(gpa, s[i]);
+            out.appendAssumeCapacity(s[i]);
             continue;
         }
         i += 1;
-        try out.append(gpa, switch (s[i]) {
+        out.appendAssumeCapacity(switch (s[i]) {
             't' => '\t',
             'n' => '\n',
             'r' => '\r',
             '\\' => '\\',
             // Not an escape we emit; keep both bytes so the round-trip stays lossless.
             else => blk: {
-                try out.append(gpa, '\\');
+                out.appendAssumeCapacity('\\');
                 break :blk s[i];
             },
         });
