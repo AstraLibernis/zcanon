@@ -34,6 +34,10 @@ pub const Record = struct {
     snippet: []const u8,
     /// Only in books written by one interim build; read so they can be migrated, never written.
     fixed_ts: []const u8 = "",
+    /// The line this record was parsed from, written back verbatim while the record is
+    /// unchanged: every hook run rewrites the whole open set but changes only one file's rows.
+    /// Empty once anything is changed, and for rows built in memory. Owned by the book's arena.
+    raw: []const u8 = "",
 
     pub fn sameFinding(a: Record, b: Record) bool {
         return std.mem.eql(u8, a.file, b.file) and
@@ -200,6 +204,8 @@ pub const Book = struct {
                 .message = try unescape(a, f[9]),
                 .snippet = try unescape(a, f[10]),
                 .fixed_ts = if (n == n_cols + 1) try unescape(a, f[11]) else "",
+                // An interim 12-column row is rewritten, which drops `fixed_ts`.
+                .raw = if (n == n_cols) try a.dupe(u8, line) else "",
             });
         }
     }
@@ -208,6 +214,11 @@ pub const Book = struct {
         try w.writeAll(header);
         try w.writeByte('\n');
         for (b.recs.items) |r| {
+            if (r.raw.len > 0) {
+                try w.writeAll(r.raw);
+                try w.writeByte('\n');
+                continue;
+            }
             try escape(w, r.first_ts);
             try w.writeByte('\t');
             try escape(w, r.last_ts);
@@ -242,6 +253,7 @@ pub const Book = struct {
             } else null;
 
             if (existing) |old| {
+                old.raw = "";
                 old.hits += 1;
                 old.last_ts = try a.dupe(u8, nr.last_ts);
                 old.line = nr.line;

@@ -280,6 +280,28 @@ test "write then parse round-trips the whole book" {
     }
 }
 
+test "write keeps untouched rows verbatim and rewrites changed ones" {
+    const gpa = testing.allocator;
+    var b: book.Book = .init(gpa);
+    defer b.deinit();
+    // Line 007 is not how `write` formats a number, so it survives only if copied verbatim.
+    const untouched = "2026-08-10 06:00:00\t2026-08-10 06:00:00\t3\t0.16.0\ta.zig\tR004\twarn\t007\t1\tkept\tsnip";
+    const text = book.header ++ "\n" ++ untouched ++ "\n" ++
+        "2026-08-10 06:00:00\t2026-08-10 06:00:00\t1\t0.16.0\tb.zig\tR005\twarn\t2\t1\tbumped\tsnip\n" ++
+        "2026-08-10 06:00:00\t2026-08-10 06:00:00\t1\t0.16.0\tc.zig\tR005\twarn\t2\t1\told row\tsnip\tfixed\n";
+    try b.parse(text);
+    var bump = rec("b.zig", "R005", "bumped", "snip");
+    bump.last_ts = "2026-09-01 00:00:00";
+    try b.upsert(&.{bump});
+
+    var w: std.Io.Writer.Allocating = .init(gpa);
+    defer w.deinit();
+    try b.write(&w.writer);
+    try testing.expectEqualStrings(book.header ++ "\n" ++ untouched ++ "\n" ++
+        "2026-08-10 06:00:00\t2026-09-01 00:00:00\t2\t0.16.0\tb.zig\tR005\twarn\t1\t1\tbumped\tsnip\n" ++
+        "2026-08-10 06:00:00\t2026-08-10 06:00:00\t1\t0.16.0\tc.zig\tR005\twarn\t2\t1\told row\tsnip\n", w.written());
+}
+
 test "parse tolerates a corrupt row without losing the rest" {
     const gpa = testing.allocator;
     var b: book.Book = .init(gpa);
