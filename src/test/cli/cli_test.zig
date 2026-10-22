@@ -110,6 +110,8 @@ test "cli: view full switches the hook to the full layout, and back" {
 test "cli: a clean file produces no output at all" {
     var s = try box("hook-clean");
     defer s.deinit();
+    // Without zephem's table the hook rightly says the map rules did not run.
+    std.Io.Dir.cwd().access(s.io, try h.zephemLookup(s.gpa()), .{}) catch return error.SkipZigTest;
     const f = try s.write("t.zig", clean_zig);
     const r = try s.hook(f);
     try testing.expectEqual(@as(u8, 0), r.code);
@@ -397,10 +399,10 @@ const build_options = @import("build_options");
 /// setup needs the zephem lookup table; with HOME unset (as in every CLI test) it has to be
 /// told where the table is. No table on this machine → skip, don't fail.
 fn setupEnv(s: *h.Sandbox) ![2][2][]const u8 {
-    if (build_options.zephem_lookup.len == 0) return error.SkipZigTest;
-    std.Io.Dir.cwd().access(s.io, build_options.zephem_lookup, .{}) catch return error.SkipZigTest;
+    const lookup = try h.zephemLookup(s.gpa());
+    std.Io.Dir.cwd().access(s.io, lookup, .{}) catch return error.SkipZigTest;
     return .{
-        .{ "ZEPHEM_LOOKUP", build_options.zephem_lookup },
+        .{ "ZEPHEM_LOOKUP", lookup },
         .{ "ZCANON_SKILL", try s.path("skills/zcanon/SKILL.md") },
     };
 }

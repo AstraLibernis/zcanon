@@ -23,6 +23,22 @@ pub const Result = struct {
     }
 };
 
+/// A variable from the environment this `zig build` ran in, read at test time. Not a build
+/// option: Zig caches the configure phase keyed on argv alone, so a value build.zig read from
+/// the environment stays whatever it was when that configuration was first cached.
+pub fn ambient(a: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    const v = std.testing.environ.getAlloc(a, key) catch return null;
+    return if (v.len == 0) null else v;
+}
+
+/// zephem's lookup table, by zephem's own precedence: `$ZEPHEM_LOOKUP`, else inside
+/// `$ZEPHEM_HOME`, else inside a zephem checkout beside this one.
+pub fn zephemLookup(a: std.mem.Allocator) ![]const u8 {
+    if (ambient(a, "ZEPHEM_LOOKUP")) |p| return p;
+    if (ambient(a, "ZEPHEM_HOME")) |zh| return std.fs.path.join(a, &.{ zh, "data", "lookup.tsv" });
+    return build_options.zephem_sibling_lookup;
+}
+
 pub const Sandbox = struct {
     arena: std.heap.ArenaAllocator,
     io: std.Io,
@@ -144,11 +160,11 @@ pub const Sandbox = struct {
         var env: std.process.Environ.Map = .init(a);
         try env.put("ZCANON_SETTINGS", try s.path("settings.json"));
         try env.put("ZCANON_CONFIG", try s.path("config"));
-        if (build_options.path_env.len > 0) try env.put("PATH", build_options.path_env);
+        if (ambient(a, "PATH")) |p| try env.put("PATH", p);
         // Windows resolves a bare `zig` to `zig.exe` through PATHEXT; without it the
         // hook's `zig ast-check` never starts.
         if (builtin.os.tag == .windows) try env.put("PATHEXT", ".COM;.EXE;.BAT;.CMD");
-        if (build_options.zephem_home.len > 0) try env.put("ZEPHEM_HOME", build_options.zephem_home);
+        if (ambient(a, "ZEPHEM_HOME")) |p| try env.put("ZEPHEM_HOME", p);
         // No background process unless a test asks for one: a test must not leave a daemon
         // (and a compiler watching the repo) running after it.
         try env.put("ZCANON_DAEMON", "0");
