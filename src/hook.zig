@@ -266,19 +266,46 @@ pub fn parseAstCheck(
 /// finding that moves but stays identical is still one finding.
 pub fn snippetFor(src: []const u8, line_no: u32) []const u8 {
     if (line_no == 0) return "";
-    var n: u32 = 1;
     var start: usize = 0;
-    for (src, 0..) |ch, i| {
-        if (n == line_no) break;
-        if (ch == '\n') {
-            n += 1;
-            start = i + 1;
-        }
+    var n: u32 = 1;
+    while (n < line_no) : (n += 1) {
+        start = (std.mem.findScalarPos(u8, src, start, '\n') orelse return "") + 1;
     }
-    if (n != line_no) return "";
     const end = std.mem.findScalarPos(u8, src, start, '\n') orelse src.len;
     return std.mem.trim(u8, src[start..end], " \t\r");
 }
+
+/// Where each line of one file starts, so every finding's snippet is found without counting
+/// lines from the top again. Same answers as `snippetFor`.
+pub const Lines = struct {
+    src: []const u8,
+    /// `starts[k]` is the offset of line k + 1.
+    starts: []const usize,
+
+    /// Caller frees with `deinit`.
+    pub fn init(gpa: std.mem.Allocator, src: []const u8) !Lines {
+        var starts: std.ArrayList(usize) = .empty;
+        errdefer starts.deinit(gpa);
+        try starts.append(gpa, 0);
+        var at: usize = 0;
+        while (std.mem.findScalarPos(u8, src, at, '\n')) |nl| {
+            try starts.append(gpa, nl + 1);
+            at = nl + 1;
+        }
+        return .{ .src = src, .starts = try starts.toOwnedSlice(gpa) };
+    }
+
+    pub fn deinit(l: Lines, gpa: std.mem.Allocator) void {
+        gpa.free(l.starts);
+    }
+
+    pub fn snippet(l: Lines, line_no: u32) []const u8 {
+        if (line_no == 0 or line_no > l.starts.len) return "";
+        const start = l.starts[line_no - 1];
+        const end = std.mem.findScalarPos(u8, l.src, start, '\n') orelse l.src.len;
+        return std.mem.trim(u8, l.src[start..end], " \t\r");
+    }
+};
 
 pub const View = enum { short, full };
 
@@ -497,15 +524,27 @@ pub fn renderResponse(arena: std.mem.Allocator, context: []const u8) ![]u8 {
 /// twice within a single batch, corrupting a counter documented as "real recurrences, not
 /// repeated saves of a fix".
 pub fn dedup(arena: std.mem.Allocator, src: []const u8, items: []const Finding) ![]Finding {
+    const lines: Lines = try .init(arena, src);
+    defer lines.deinit(arena);
+    return dedupLines(arena, lines, items);
+}
+
+/// `dedup` with the file's line index already built. Each finding's snippet is looked up once.
+pub fn dedupLines(arena: std.mem.Allocator, lines: Lines, items: []const Finding) ![]Finding {
     var out: std.ArrayList(Finding) = .empty;
+    var snips: std.ArrayList([]const u8) = .empty;
+    defer snips.deinit(arena);
     for (items) |f| {
-        const snip = snippetFor(src, f.line);
-        const dup = for (out.items) |seen| {
+        const snip = lines.snippet(f.line);
+        const dup = for (out.items, snips.items) |seen, seen_snip| {
             if (std.mem.eql(u8, seen.rule, f.rule) and
                 std.mem.eql(u8, seen.message, f.message) and
-                std.mem.eql(u8, snippetFor(src, seen.line), snip)) break true;
+                std.mem.eql(u8, seen_snip, snip)) break true;
         } else false;
-        if (!dup) try out.append(arena, f);
+        if (!dup) {
+            try out.append(arena, f);
+            try snips.append(arena, snip);
+        }
     }
     return out.items;
 }

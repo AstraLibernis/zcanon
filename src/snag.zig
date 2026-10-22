@@ -193,7 +193,7 @@ pub const Finding = struct {
     }
 };
 
-const Tk = struct { tag: Token.Tag, start: usize, end: usize };
+pub const Tk = struct { tag: Token.Tag, start: usize, end: usize };
 
 /// What a declaration acquired, and so what releases it.
 const Owns = enum {
@@ -262,23 +262,19 @@ pub fn collectAllow(gpa: std.mem.Allocator, src: []const u8, out: *std.ArrayList
     }
 }
 
-fn lex(gpa: std.mem.Allocator, src: [:0]const u8) ![]Tk {
-    var n: usize = 0;
+/// Every token of `src`, ending with `.eof`. Caller frees.
+pub fn lex(gpa: std.mem.Allocator, src: [:0]const u8) ![]Tk {
+    var toks: std.ArrayList(Tk) = .empty;
+    errdefer toks.deinit(gpa);
+    // About one token per 8 bytes of source (the ratio `std.zig.Ast.parse` reserves for).
+    try toks.ensureTotalCapacity(gpa, src.len / 8 + 1);
     var tz = Tokenizer.init(src);
     while (true) {
         const t = tz.next();
-        n += 1;
+        try toks.append(gpa, .{ .tag = t.tag, .start = t.loc.start, .end = t.loc.end });
         if (t.tag == .eof) break;
     }
-    const toks = try gpa.alloc(Tk, n);
-    var tz2 = Tokenizer.init(src);
-    var i: usize = 0;
-    while (true) : (i += 1) {
-        const t = tz2.next();
-        toks[i] = .{ .tag = t.tag, .start = t.loc.start, .end = t.loc.end };
-        if (t.tag == .eof) break;
-    }
-    return toks;
+    return toks.toOwnedSlice(gpa);
 }
 
 pub const Scanner = struct {
@@ -357,6 +353,9 @@ pub fn scanWithMap(
 
 pub const Opts = struct {
     map: ?*const zephem.Map = null,
+    /// `lex(src)` already done by the caller (who also needed it for `mapKeysTokens`), so the
+    /// file is tokenized once. Borrowed for the call. Null → the scan lexes it itself.
+    tokens: ?[]const Tk = null,
     /// R013 (a std path with no map entry) is ON by default, at advisory severity: left off,
     /// removed APIs (`std.fs.cwd`, `std.io.getStdOut`) passed the hook silently. Measured 3
     /// findings across Zig's own std (550 files) after the container-kind guard; all 3 are
@@ -396,8 +395,9 @@ pub fn scanWithOpts(
         .out = out,
         .stale = opts.stale,
     };
-    const t = try lex(gpa, src);
-    defer gpa.free(t);
+    const owned: ?[]Tk = if (opts.tokens == null) try lex(gpa, src) else null;
+    defer if (owned) |o| gpa.free(o);
+    const t = opts.tokens orelse owned.?;
 
     try scanTokens(st, t);
     try scanStreamZero(st, t);
@@ -939,9 +939,14 @@ const premise_keys = [_][]const u8{ "std.mem.copy", "std.mem.set" };
 /// Every map path a scan of `src` can query: each std chain, all its proper prefixes (for
 /// `longestPrefixKind`), and the premise self-check paths. Pass the set to `zephem.load`.
 pub fn mapKeys(gpa: std.mem.Allocator, src: [:0]const u8, keys: *zephem.Keys) !void {
-    for (premise_keys) |k| try zephem.addKey(gpa, keys, k);
     const t = try lex(gpa, src);
     defer gpa.free(t);
+    return mapKeysTokens(gpa, src, t, keys);
+}
+
+/// `mapKeys` over `lex(src)` the caller already has.
+pub fn mapKeysTokens(gpa: std.mem.Allocator, src: [:0]const u8, t: []const Tk, keys: *zephem.Keys) !void {
+    for (premise_keys) |k| try zephem.addKey(gpa, keys, k);
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
     var i: usize = 0;

@@ -38,6 +38,9 @@ pub const Record = struct {
     /// unchanged: every hook run rewrites the whole open set but changes only one file's rows.
     /// Empty once anything is changed, and for rows built in memory. Owned by the book's arena.
     raw: []const u8 = "",
+    /// Left packed by `Book.parseLazy`: only `file`, `hits`, `line`, `col` and `raw` are set
+    /// until `Book.expand` unpacks it.
+    lazy: bool = false,
 
     pub fn sameFinding(a: Record, b: Record) bool {
         return std.mem.eql(u8, a.file, b.file) and
@@ -78,6 +81,49 @@ fn isActive(group: []const u8, active: []const []const u8) bool {
 
 pub const header = "first_ts\tlast_ts\thits\tzig_version\tfile\trule\tseverity\tline\tcol\tmessage\tsnippet";
 const n_cols = 11;
+
+/// One line of the open set, split on tabs but not unescaped. Null for a line `parse` skips.
+const Row = struct {
+    f: [n_cols + 1][]const u8,
+    n: usize,
+    hits: u64,
+    line: u32,
+    col: u32,
+};
+
+fn splitRow(line: []const u8) ?Row {
+    var row: Row = .{ .f = undefined, .n = 0, .hits = 0, .line = 0, .col = 0 };
+    var it = std.mem.splitScalar(u8, line, '\t');
+    while (it.next()) |field| : (row.n += 1) {
+        if (row.n > n_cols) break;
+        row.f[row.n] = field;
+    }
+    if (row.n != n_cols and row.n != n_cols + 1) return null;
+    row.hits = std.fmt.parseInt(u64, row.f[2], 10) catch return null;
+    row.line = std.fmt.parseInt(u32, row.f[7], 10) catch return null;
+    row.col = std.fmt.parseInt(u32, row.f[8], 10) catch return null;
+    return row;
+}
+
+/// Every field of `row`, unescaped into `a`.
+fn fullRecord(a: std.mem.Allocator, row: Row, line: []const u8) !Record {
+    const f = row.f;
+    return .{
+        .first_ts = try unescape(a, f[0]),
+        .last_ts = try unescape(a, f[1]),
+        .hits = row.hits,
+        .zig_version = try unescape(a, f[3]),
+        .file = try unescape(a, f[4]),
+        .rule = try unescape(a, f[5]),
+        .severity = try unescape(a, f[6]),
+        .line = row.line,
+        .col = row.col,
+        .message = try unescape(a, f[9]),
+        .snippet = try unescape(a, f[10]),
+        .fixed_ts = if (row.n == n_cols + 1) try unescape(a, f[11]) else "",
+        .raw = if (row.n == n_cols) try a.dupe(u8, line) else "",
+    };
+}
 
 /// Bytes `escape` rewrites. Runs between them are copied whole: almost no field has any.
 const specials = "\\\t\n\r";
@@ -173,6 +219,17 @@ pub const Book = struct {
     /// Parse a book from TSV text. Malformed lines are skipped rather than aborting — a
     /// corrupt row must not cost the operator the rest of their history.
     pub fn parse(b: *Book, text: []const u8) !void {
+        return b.parseMode(text, false);
+    }
+
+    /// `parse` for a caller that reads only the rows of the files it scans (the hook): each
+    /// row keeps its line and file, and `expand` unpacks the rest when a scan reaches it. The
+    /// same rows are kept or skipped as by `parse`.
+    pub fn parseLazy(b: *Book, text: []const u8) !void {
+        return b.parseMode(text, true);
+    }
+
+    fn parseMode(b: *Book, text: []const u8, lazy: bool) !void {
         const a = b.arena.allocator();
         var lines = std.mem.splitScalar(u8, text, '\n');
         var first = true;
@@ -182,38 +239,40 @@ pub const Book = struct {
                 first = false;
                 if (std.mem.startsWith(u8, line, "first_ts\t")) continue;
             }
-            var f: [n_cols + 1][]const u8 = undefined;
-            var it = std.mem.splitScalar(u8, line, '\t');
-            var n: usize = 0;
-            while (it.next()) |field| : (n += 1) {
-                if (n > n_cols) break;
-                f[n] = field;
-            }
-            if (n != n_cols and n != n_cols + 1) continue;
-
-            try b.recs.append(b.gpa, .{
-                .first_ts = try unescape(a, f[0]),
-                .last_ts = try unescape(a, f[1]),
-                .hits = std.fmt.parseInt(u64, f[2], 10) catch continue,
-                .zig_version = try unescape(a, f[3]),
-                .file = try unescape(a, f[4]),
-                .rule = try unescape(a, f[5]),
-                .severity = try unescape(a, f[6]),
-                .line = std.fmt.parseInt(u32, f[7], 10) catch continue,
-                .col = std.fmt.parseInt(u32, f[8], 10) catch continue,
-                .message = try unescape(a, f[9]),
-                .snippet = try unescape(a, f[10]),
-                .fixed_ts = if (n == n_cols + 1) try unescape(a, f[11]) else "",
-                // An interim 12-column row is rewritten, which drops `fixed_ts`.
-                .raw = if (n == n_cols) try a.dupe(u8, line) else "",
-            });
+            const row = splitRow(line) orelse continue;
+            // An interim 12-column row is always unpacked: it is rewritten, dropping `fixed_ts`.
+            try b.recs.append(b.gpa, if (lazy and row.n == n_cols) .{
+                .first_ts = "",
+                .last_ts = "",
+                .hits = row.hits,
+                .zig_version = "",
+                .file = try unescape(a, row.f[4]),
+                .rule = "",
+                .severity = "",
+                .line = row.line,
+                .col = row.col,
+                .message = "",
+                .snippet = "",
+                .raw = try a.dupe(u8, line),
+                .lazy = true,
+            } else try fullRecord(a, row, line));
         }
+    }
+
+    /// Unpack the rows `scope` covers that `parseLazy` left packed.
+    pub fn expand(b: *Book, scope: Scope) !void {
+        for (b.recs.items) |*r| if (r.lazy and scope.covers(r.file)) try b.expandOne(r);
+    }
+
+    fn expandOne(b: *Book, r: *Record) !void {
+        r.* = try fullRecord(b.arena.allocator(), splitRow(r.raw).?, r.raw);
     }
 
     pub fn write(b: *const Book, w: *std.Io.Writer) !void {
         try w.writeAll(header);
         try w.writeByte('\n');
         for (b.recs.items) |r| {
+            std.debug.assert(!r.lazy or r.raw.len > 0);
             if (r.raw.len > 0) {
                 try w.writeAll(r.raw);
                 try w.writeByte('\n');
@@ -249,6 +308,10 @@ pub const Book = struct {
         const a = b.arena.allocator();
         for (fresh) |nr| {
             const existing = for (b.recs.items) |*old| {
+                if (old.lazy) {
+                    if (!std.mem.eql(u8, old.file, nr.file)) continue;
+                    try b.expandOne(old);
+                }
                 if (Record.sameFinding(old.*, nr)) break old;
             } else null;
 
@@ -308,7 +371,10 @@ pub const Book = struct {
         var i: usize = 0;
         while (i < b.recs.items.len) {
             const r = b.recs.items[i];
-            const in_scope = scope.covers(r.file) and isActive(groupOf(r.rule), active);
+            const covered = scope.covers(r.file);
+            // A packed row's rule is not read yet: `expand(scope)` must run first.
+            std.debug.assert(!(covered and r.lazy));
+            const in_scope = covered and isActive(groupOf(r.rule), active);
             if (!in_scope) {
                 i += 1;
                 continue;

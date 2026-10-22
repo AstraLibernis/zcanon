@@ -307,6 +307,9 @@ const Run = struct {
     /// Each file's syntax check, started in `init` so it runs alongside the map load; null
     /// when the file was unreadable or no concurrency was available (then it runs inline).
     ast: []?std.Io.Future(hook.AstCheckError![]const u8),
+    /// Each file's tokens, made once in `init` for the map keys and reused by its scan; null
+    /// when the file was unreadable. Allocated from `c.gpa`, the process arena.
+    toks: []?[]const snag.Tk,
     map: ?zephem.Map,
     stale: []const snag.Id,
     zver: []const u8,
@@ -340,11 +343,13 @@ const Run = struct {
         else
             null;
 
-        var r: Run = .{ .c = c, .ast = ast, .map = null, .stale = &.{}, .zver = "unknown", .notices = .empty };
+        const toks = try c.gpa.alloc(?[]const snag.Tk, files.len);
+        for (files, toks) |f, *t| t.* = if (f.src) |src| try snag.lex(c.gpa, src) else null;
+        var r: Run = .{ .c = c, .ast = ast, .toks = toks, .map = null, .stale = &.{}, .zver = "unknown", .notices = .empty };
         const stamp_buf = try c.gpa.create([20]u8);
         r.now = book.stamp(stamp_buf, book.nowSeconds(c.io)) catch "";
         var keys: zephem.Keys = .empty;
-        for (files) |f| if (f.src) |src| try snag.mapKeys(c.gpa, src, &keys);
+        for (files, toks) |f, t| if (f.src) |src| try snag.mapKeysTokens(c.gpa, src, t.?, &keys);
 
         // Each file's project daemon: the first one also serves the map rows and zig version.
         // No daemon yet → start one for next time and do everything here.
@@ -469,6 +474,7 @@ const Run = struct {
             .ran_structural = &parsed,
             .stale = r.stale,
             .io = c.io,
+            .tokens = r.toks[i],
         });
         try active.append(c.gpa, book.GROUP_CORE);
         if (parsed) try active.append(c.gpa, book.GROUP_STRUCTURAL);
@@ -490,11 +496,13 @@ const Run = struct {
 
         // Dedup on the book's key before anything consumes the list — otherwise a duplicate
         // renders twice and double-counts `hits`.
-        const deduped = try hook.dedup(c.gpa, src, findings.items);
+        const lines: hook.Lines = try .init(c.gpa, src);
+        defer lines.deinit(c.gpa);
+        const deduped = try hook.dedupLines(c.gpa, lines, findings.items);
         hook.sortFindings(deduped);
 
         var fresh: std.ArrayList(book.Record) = .empty;
-        for (deduped) |f| try fresh.append(c.gpa, r.recordOf(path, f.rule, f.severity, f.line, f.col, f.message, hook.snippetFor(src, f.line)));
+        for (deduped) |f| try fresh.append(c.gpa, r.recordOf(path, f.rule, f.severity, f.line, f.col, f.message, lines.snippet(f.line)));
         r.record(.{ .file = path }, fresh.items, active.items);
         return .{ .findings = deduped };
     }
@@ -541,6 +549,7 @@ const Run = struct {
         }
         // A finding not already open is a new occurrence: +1 to its mistake in the history.
         var new: std.ArrayList(book.Record) = .empty;
+        try r.ledger.?.expand(scope);
         r.ledger.?.prune(scope, fresh, active);
         try r.ledger.?.upsertTracking(fresh, &new);
         for (new.items) |n| {
@@ -567,7 +576,7 @@ const Run = struct {
     fn load(r: *Run) !void {
         r.ledger = .init(r.c.gpa);
         r.history = .init(r.c.gpa);
-        try loadLedger(r.c, &r.ledger.?, &r.history.?);
+        try loadLedger(r.c, &r.ledger.?, &r.history.?, .lazy);
         const text = std.Io.Dir.cwd().readFileAlloc(r.c.io, try sidePath(r.c, "seen.txt"), r.c.gpa, .unlimited) catch "";
         var lines = std.mem.splitScalar(u8, text, '\n');
         while (lines.next()) |l| if (l.len > 0) try r.seen.put(r.c.gpa, l, {});
@@ -885,7 +894,7 @@ fn runView(c: vars.Ctx, args: []const []const u8) !void {
 /// Load the open set and the history. A book in the old per-finding format (before the
 /// history existed) is migrated: it becomes the open set, and each of its rows counts as one
 /// occurrence in the history. Rows an interim build had marked fixed go to the history only.
-fn loadLedger(c: vars.Ctx, open: *book.Book, history: *book.History) !void {
+fn loadLedger(c: vars.Ctx, open: *book.Book, history: *book.History, how: enum { full, lazy }) !void {
     const text = std.Io.Dir.cwd().readFileAlloc(c.io, try vars.bookPath(c), c.gpa, .unlimited) catch "";
     if (book.isOpenFormat(text)) {
         var old: book.Book = .init(c.gpa);
@@ -898,7 +907,7 @@ fn loadLedger(c: vars.Ctx, open: *book.Book, history: *book.History) !void {
     }
     try history.parse(text);
     if (std.Io.Dir.cwd().readFileAlloc(c.io, try openPath(c), c.gpa, .unlimited)) |open_text| {
-        try open.parse(open_text);
+        try if (how == .lazy) open.parseLazy(open_text) else open.parse(open_text);
     } else |_| {}
 }
 
@@ -906,7 +915,7 @@ fn runBook(c: vars.Ctx, args: []const []const u8) !void {
     if (args.len > 0 and std.mem.eql(u8, args[0], "publish")) return runPublish(c, args[1..]);
     var open: book.Book = .init(c.gpa);
     var history: book.History = .init(c.gpa);
-    try loadLedger(c, &open, &history);
+    try loadLedger(c, &open, &history, .full);
     const mode = report.Mode.parse(args) catch return fail(c, "unknown report; try: book | book rules | book recent [N] | book open | book R0NN\n");
 
     var buf: [1 << 16]u8 = undefined;
@@ -945,7 +954,7 @@ fn runPublish(c: vars.Ctx, args: []const []const u8) !void {
             return fail(c, "no repo to publish into: zcanon book publish on <repo>\n");
         var open: book.Book = .init(c.gpa);
         var history: book.History = .init(c.gpa);
-        try loadLedger(c, &open, &history);
+        try loadLedger(c, &open, &history, .full);
         const outcome = publish.run(c, repo, history.entries.items);
         var sbuf: [20]u8 = undefined;
         const when = book.stamp(&sbuf, book.nowSeconds(c.io)) catch "?";
@@ -967,7 +976,7 @@ fn runPublish(c: vars.Ctx, args: []const []const u8) !void {
 fn runPrune(c: vars.Ctx) !void {
     var open: book.Book = .init(c.gpa);
     var history: book.History = .init(c.gpa);
-    try loadLedger(c, &open, &history);
+    try loadLedger(c, &open, &history, .full);
     const before = open.recs.items.len;
 
     // Only the open set: a file that is gone has no findings in it any more. The history is

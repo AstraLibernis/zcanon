@@ -392,3 +392,67 @@ test "upsertTracking reports only findings that were not already open" {
     try b.upsertTracking(&.{r}, &new);
     try testing.expectEqual(@as(usize, 1), new.items.len);
 }
+
+/// One hook-shaped update — expand, prune, upsert — then the written book.
+fn updated(gpa: std.mem.Allocator, text: []const u8, lazy: bool, scope: book.Book.Scope, fresh: []const book.Record, new: *std.ArrayList(book.Record)) ![]u8 {
+    var b: book.Book = .init(gpa);
+    defer b.deinit();
+    if (lazy) try b.parseLazy(text) else try b.parse(text);
+    try b.expand(scope);
+    b.prune(scope, fresh, &.{ book.GROUP_CORE, book.GROUP_AST, book.GROUP_COMPILE });
+    try b.upsertTracking(fresh, new);
+    var w: std.Io.Writer.Allocating = .init(gpa);
+    errdefer w.deinit();
+    try b.write(&w.writer);
+    return w.toOwnedSlice();
+}
+
+test "a lazily parsed book updates exactly like a fully parsed one" {
+    const gpa = testing.allocator;
+    const ts = "2026-08-10 06:00:00\t2026-08-10 06:00:00\t";
+    const text = book.header ++ "\n" ++
+        ts ++ "3\t0.17.0\t/p/a.zig\tR004\twarn\t007\t1\tstays\tx catch unreachable;\n" ++
+        ts ++ "1\t0.17.0\t/p/a.zig\tR005\twarn\t2\t1\tresolved\tgone();\n" ++
+        ts ++ "1\t0.17.0\t/p/a.zig\tast-check\terror\t4\t2\ttab\\there\tline\\\\with\\tescapes\n" ++
+        ts ++ "2\t0.17.0\t/p/sub/b.zig\tcompile\terror\t9\t1\tcompile gone\tb();\n" ++
+        ts ++ "5\t0.17.0\t/q/c.zig\tR004\twarn\t1\t1\tother project\tc();\n" ++
+        "not\tenough\tcolumns\n" ++
+        ts ++ "NaN\t0.17.0\t/p/a.zig\tR004\twarn\t1\t1\tbad hits\tz\n" ++
+        ts ++ "1\t0.17.0\t/p/d.zig\tR004\twarn\t1\t1\tinterim row\td();\t2026-08-11 00:00:00\n";
+    var still = rec("/p/a.zig", "R004", "stays", "x catch unreachable;");
+    still.last_ts = "2026-09-01 00:00:00";
+    var esc = rec("/p/a.zig", book.AST_RULE, "tab\there", "line\\with\tescapes");
+    esc.severity = "error";
+    const fresh_file = [_]book.Record{ still, esc, rec("/p/a.zig", "R006", "brand new", "n();") };
+    const fresh_under = [_]book.Record{rec("/p/sub/b.zig", book.COMPILE_RULE, "new compile", "b2();")};
+    const cases = [_]struct { scope: book.Book.Scope, fresh: []const book.Record }{
+        .{ .scope = .{ .file = "/p/a.zig" }, .fresh = &fresh_file },
+        .{ .scope = .{ .under = "/p" }, .fresh = &fresh_under },
+        .{ .scope = .{ .file = "/nowhere.zig" }, .fresh = &.{} },
+    };
+    for (cases) |cs| {
+        var new_full: std.ArrayList(book.Record) = .empty;
+        defer new_full.deinit(gpa);
+        var new_lazy: std.ArrayList(book.Record) = .empty;
+        defer new_lazy.deinit(gpa);
+        const full = try updated(gpa, text, false, cs.scope, cs.fresh, &new_full);
+        defer gpa.free(full);
+        const lazy = try updated(gpa, text, true, cs.scope, cs.fresh, &new_lazy);
+        defer gpa.free(lazy);
+        try testing.expectEqualStrings(full, lazy);
+        try testing.expectEqual(new_full.items.len, new_lazy.items.len);
+    }
+}
+
+test "upsert unpacks a packed row of the same file before matching it" {
+    const gpa = testing.allocator;
+    const text = book.header ++ "\n" ++
+        "2026-08-10 06:00:00\t2026-08-10 06:00:00\t3\t0.17.0\t/p/a.zig\tR004\twarn\t5\t1\tseen\tx();\n";
+    var b: book.Book = .init(gpa);
+    defer b.deinit();
+    try b.parseLazy(text);
+    try b.upsert(&.{rec("/p/a.zig", "R004", "seen", "x();")});
+    try testing.expectEqual(@as(usize, 1), b.recs.items.len);
+    try testing.expectEqual(@as(u64, 4), b.recs.items[0].hits);
+    try testing.expectEqualStrings("seen", b.recs.items[0].message);
+}

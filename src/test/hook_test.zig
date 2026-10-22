@@ -115,6 +115,29 @@ test "snippet is the trimmed source line" {
     try testing.expectEqualStrings("", hook.snippetFor(src, 99));
 }
 
+test "the line index answers exactly like snippetFor" {
+    const gpa = testing.allocator;
+    const cases = [_][]const u8{
+        "",
+        "one line, no newline",
+        "a\nb\n",
+        "a\nb",
+        "\n\n\n",
+        "crlf one\r\n\tcrlf two \r\nlast",
+        "  lead\n\n  gap after blank  \n",
+    };
+    for (cases) |src| {
+        const lines: hook.Lines = try .init(gpa, src);
+        defer lines.deinit(gpa);
+        var n: u32 = 0;
+        while (n <= 8) : (n += 1) try testing.expectEqualStrings(hook.snippetFor(src, n), lines.snippet(n));
+    }
+    // And snippetFor itself, on the shapes the index must match.
+    try testing.expectEqualStrings("crlf two", hook.snippetFor("crlf one\r\n\tcrlf two \r\nlast", 2));
+    try testing.expectEqualStrings("", hook.snippetFor("a\nb\n", 3));
+    try testing.expectEqualStrings("b", hook.snippetFor("a\nb", 2));
+}
+
 test "context groups by tier in urgency order" {
     var a = arena();
     defer a.deinit();

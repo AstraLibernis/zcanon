@@ -492,3 +492,27 @@ test "R015 follows an array length into an imported file" {
     try snag.scanWithOpts(gpa, path, src, &no_io, .{});
     try testing.expectEqual(@as(usize, 0), no_io.items.len);
 }
+
+test "a scan handed the tokens finds exactly what a scan that lexes finds" {
+    const gpa = testing.allocator;
+    for (rule_cases) |c| {
+        var own: std.ArrayList(snag.Finding) = .empty;
+        defer own.deinit(gpa);
+        try snag.scanWithOpts(gpa, "t.zig", c.src, &own, .{});
+
+        const t = try snag.lex(gpa, c.src);
+        defer gpa.free(t);
+        try testing.expectEqual(std.zig.Token.Tag.eof, t[t.len - 1].tag);
+        var shared: std.ArrayList(snag.Finding) = .empty;
+        defer shared.deinit(gpa);
+        try snag.scanWithOpts(gpa, "t.zig", c.src, &shared, .{ .tokens = t });
+
+        try testing.expectEqual(own.items.len, shared.items.len);
+        for (own.items, shared.items) |a, b| {
+            try testing.expectEqual(a.id, b.id);
+            try testing.expectEqual(a.line, b.line);
+            try testing.expectEqual(a.col, b.col);
+            try testing.expectEqualStrings(a.msg, b.msg);
+        }
+    }
+}
