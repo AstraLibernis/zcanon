@@ -182,15 +182,16 @@ compil	erro	10	2026-10-17 05:25:1	2026-10-17 05:25:4	zneuro	no field named '…'
 compil	erro	5	2026-09-28 18:18:1	2026-10-17 05:25:4	zneuro	no field named '…' in struct '…'
 compile	error	10	2026-10-17 05:25:17	2026-10-17 05:25:40	zneuro	no field named '…' in enum '…'
 compile	error	5	2026-09-28 18:18:15	2026-10-17 05:25:40	zneuro	no field named '…' in struct '…'
-R004	warn	12	2026-09-28 18:32:0	2026-10-22 19:01:07	zpack	catch unreachable crashes in release if it ever fails; handle the error.
+R004	warn	13	2026-09-28 18:32:0	2026-10-27 14:02:55	zpack	catch unreachable crashes in release if it ever fails; handle the error.
 R005	warn	8	2026-09-28 17:23:0	2026-10-22 19:54:00	zpack	empty catch {} silently swallows an error.
-R007	info	757	2026-09-28 17:10:5	2026-10-26 20:29:12	zpack	this cast can panic/corrupt if out of range; verify first.
+R007	info	806	2026-09-28 17:10:5	2026-10-27 18:00:46	zpack	this cast can panic/corrupt if out of range; verify first.
 R009	info	20	2026-10-02 12:34:2	2026-10-23 12:38:44	zpack	page_allocator as a general allocator is slow; pass an allocator in.
-R010	info	68	2026-10-07 12:26:5	2026-10-26 20:01:40	zpack	debug.print left in code? remove or use std.log.
+R010	info	76	2026-10-07 12:26:5	2026-10-27 12:49:01	zpack	debug.print left in code? remove or use std.log.
 R011	warn	65	2026-10-22 14:30:50	2026-10-22 18:29:10	zpack	`std.fmt.allocPrint` is deprecated — the map says: use `Allocator.print`.
 R011	warn	6	2026-10-22 14:29:55	2026-10-22 18:44:50	zpack	`std.fmt.bufPrint` is deprecated — the map says: use `mem.print`.
 R011	warn	3	2026-09-28 19:26:2	2026-10-22 18:44:50	zpack	`std.fs.max_path_bytes` is deprecated — the map says: use `std.Io.Dir.max_path_bytes`.
 R011	warn	2	2026-10-21 17:38:1	2026-10-22 18:45:20	zpack	`std.testing.TmpDir.parent_dir_path` is deprecated — the map says: Deprecated.
+R013	info	1	2026-10-27 13:02:50	2026-10-27 13:02:50	zpack	`std.Thread.Mutex` is not in the zephem map — cannot verify it exists (check with `zephem look`).
 R013	info	1	2026-10-23 13:52:32	2026-10-23 13:52:32	zpack	`std.process.hasEnvVarConstant` is not in the zephem map — cannot verify it exists (check with `zephem look`).
 R013	info	1	2026-10-22 18:58:06	2026-10-22 18:58:06	zpack	`std.time.Timer.start` is not in the zephem map — cannot verify it exists (check with `zephem look`).
 R015	info	1	2026-10-23 14:22:01	2026-10-23 14:22:01	zpack	large `= undefined` array on the stack (>= 64 KiB): Debug and ReleaseSafe write 0xAA over all of it on every call, and the frame costs a stack probe in every mode. Harmless in a function called once; in one called per row, node or round, size it to need or allocate it once outside the loop.
@@ -210,11 +211,11 @@ ast-check	error	1	2026-10-26 15:57:13	2026-10-26 15:57:13	zpack	local constant s
 ast-check	info	2	2026-10-23 11:17:49	2026-10-23 11:27:32	zpack	previous declaration here
 ast-check	error	1	2026-10-23 11:27:32	2026-10-23 11:27:32	zpack	redeclaration of local variable '…'
 ast-check	info	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	struct declared here
-ast-check	error	2	2026-10-26 17:04:50	2026-10-26 19:20:51	zpack	unused function parameter
+ast-check	error	3	2026-10-26 17:04:50	2026-10-27 13:03:12	zpack	unused function parameter
 ast-check	error	2	2026-10-23 14:26:53	2026-10-26 18:27:21	zpack	unused local constant
 ast-check	error	1	2026-10-23 12:44:54	2026-10-23 12:44:54	zpack	unused local variable
-ast-check	error	8	2026-10-22 19:01:43	2026-10-26 18:19:32	zpack	use of undeclared identifier '…'
-compile	error	3	2026-10-23 14:25:21	2026-10-26 16:58:18	zpack	ambiguous coercion of division operands '…' and '…'; non-zero remainder '…'
+ast-check	error	22	2026-10-22 19:01:43	2026-10-27 18:13:37	zpack	use of undeclared identifier '…'
+compile	error	4	2026-10-23 14:25:21	2026-10-27 12:51:49	zpack	ambiguous coercion of division operands '…' and '…'; non-zero remainder '…'
 compile	error	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	duplicate struct member name '…'
 compile	error	1	2026-10-23 12:17:49	2026-10-23 12:17:49	zpack	expected '…' after declaration
 compile	error	2	2026-10-22 18:45:20	2026-10-23 14:22:01	zpack	expected type '…', found '…'
@@ -222,7 +223,7 @@ compile	error	1	2026-10-26 19:29:27	2026-10-26 19:29:27	zpack	function parameter
 compile	error	1	2026-10-26 15:57:13	2026-10-26 15:57:13	zpack	local constant shadows declaration of '…'
 compile	error	1	2026-10-23 11:27:32	2026-10-23 11:27:32	zpack	redeclaration of local variable '…'
 compile	error	2	2026-10-22 18:58:06	2026-10-23 13:52:32	zpack	root source file struct '…' has no member named '…'
-compile	error	2	2026-10-22 19:01:43	2026-10-26 18:19:32	zpack	use of undeclared identifier '…'
+compile	error	3	2026-10-22 19:01:43	2026-10-27 13:01:46	zpack	use of undeclared identifier '…'
 compile	error	1	2026-10-22 18:29:38	2026-10-22 18:29:38	zpack	value with comptime-only type '…' depends on runtime control flow
 ast-chec	erro	1	2026-10-14 13:18:3	2026-10-14 13:18:3	zprism	invalid builtin function: '…
 ast-check	error	1	2026-10-14 13:18:31	2026-10-14 13:18:31	zprism	invalid builtin function: '…'
