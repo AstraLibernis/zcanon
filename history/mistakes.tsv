@@ -183,10 +183,10 @@ compil	erro	5	2026-09-28 18:18:1	2026-10-17 05:25:4	zneuro	no field named '…' 
 compile	error	10	2026-10-17 05:25:17	2026-10-17 05:25:40	zneuro	no field named '…' in enum '…'
 compile	error	5	2026-09-28 18:18:15	2026-10-17 05:25:40	zneuro	no field named '…' in struct '…'
 R004	warn	13	2026-09-28 18:32:0	2026-10-27 14:02:55	zpack	catch unreachable crashes in release if it ever fails; handle the error.
-R005	warn	8	2026-09-28 17:23:0	2026-10-22 19:54:00	zpack	empty catch {} silently swallows an error.
-R007	info	806	2026-09-28 17:10:5	2026-10-27 18:00:46	zpack	this cast can panic/corrupt if out of range; verify first.
+R005	warn	10	2026-09-28 17:23:0	2026-10-28 17:37:57	zpack	empty catch {} silently swallows an error.
+R007	info	885	2026-09-28 17:10:5	2026-10-28 18:03:43	zpack	this cast can panic/corrupt if out of range; verify first.
 R009	info	20	2026-10-02 12:34:2	2026-10-23 12:38:44	zpack	page_allocator as a general allocator is slow; pass an allocator in.
-R010	info	76	2026-10-07 12:26:5	2026-10-27 12:49:01	zpack	debug.print left in code? remove or use std.log.
+R010	info	97	2026-10-07 12:26:5	2026-10-28 18:01:58	zpack	debug.print left in code? remove or use std.log.
 R011	warn	65	2026-10-22 14:30:50	2026-10-22 18:29:10	zpack	`std.fmt.allocPrint` is deprecated — the map says: use `Allocator.print`.
 R011	warn	6	2026-10-22 14:29:55	2026-10-22 18:44:50	zpack	`std.fmt.bufPrint` is deprecated — the map says: use `mem.print`.
 R011	warn	3	2026-09-28 19:26:2	2026-10-22 18:44:50	zpack	`std.fs.max_path_bytes` is deprecated — the map says: use `std.Io.Dir.max_path_bytes`.
@@ -196,25 +196,26 @@ R013	info	1	2026-10-23 13:52:32	2026-10-23 13:52:32	zpack	`std.process.hasEnvVar
 R013	info	1	2026-10-22 18:58:06	2026-10-22 18:58:06	zpack	`std.time.Timer.start` is not in the zephem map — cannot verify it exists (check with `zephem look`).
 R015	info	1	2026-10-23 14:22:01	2026-10-23 14:22:01	zpack	large `= undefined` array on the stack (>= 64 KiB): Debug and ReleaseSafe write 0xAA over all of it on every call, and the frame costs a stack probe in every mode. Harmless in a function called once; in one called per row, node or round, size it to need or allocate it once outside the loop.
 ast-check	error	2	2026-10-22 18:27:08	2026-10-23 11:15:56	zpack	binary operator '…' has whitespace on one side, but not the other
-ast-check	info	2	2026-10-26 15:57:13	2026-10-26 19:29:27	zpack	declared here
+ast-check	info	4	2026-10-26 15:57:13	2026-10-28 18:03:23	zpack	declared here
 ast-check	info	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	duplicate name here
 ast-check	error	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	duplicate struct member name '…'
 ast-check	error	1	2026-10-23 12:17:49	2026-10-23 12:17:49	zpack	expected '…' after declaration
 ast-check	error	1	2026-10-26 12:44:52	2026-10-26 12:44:52	zpack	expected '…' after field
 ast-check	error	1	2026-10-23 12:00:58	2026-10-23 12:00:58	zpack	expected '…' after initializer
 ast-check	error	1	2026-10-22 19:55:12	2026-10-22 19:55:12	zpack	expected '…' after statement
-ast-check	error	2	2026-10-26 12:47:18	2026-10-26 15:56:39	zpack	expected statement, found '…'
+ast-check	error	4	2026-10-26 12:47:18	2026-10-28 15:06:37	zpack	expected statement, found '…'
 ast-check	error	1	2026-10-26 16:40:25	2026-10-26 16:40:25	zpack	expected type expression, found '…'
 ast-check	error	1	2026-10-26 19:29:27	2026-10-26 19:29:27	zpack	function parameter shadows declaration of '…'
 ast-check	error	1	2026-10-23 11:17:49	2026-10-23 11:17:49	zpack	local constant '…' shadows function parameter from outer scope
-ast-check	error	1	2026-10-26 15:57:13	2026-10-26 15:57:13	zpack	local constant shadows declaration of '…'
+ast-check	error	2	2026-10-26 15:57:13	2026-10-28 13:23:30	zpack	local constant shadows declaration of '…'
+ast-check	error	1	2026-10-28 18:03:23	2026-10-28 18:03:23	zpack	local variable shadows declaration of '…'
 ast-check	info	2	2026-10-23 11:17:49	2026-10-23 11:27:32	zpack	previous declaration here
 ast-check	error	1	2026-10-23 11:27:32	2026-10-23 11:27:32	zpack	redeclaration of local variable '…'
 ast-check	info	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	struct declared here
-ast-check	error	3	2026-10-26 17:04:50	2026-10-27 13:03:12	zpack	unused function parameter
-ast-check	error	2	2026-10-23 14:26:53	2026-10-26 18:27:21	zpack	unused local constant
+ast-check	error	4	2026-10-26 17:04:50	2026-10-28 18:02:50	zpack	unused function parameter
+ast-check	error	3	2026-10-23 14:26:53	2026-10-28 13:23:35	zpack	unused local constant
 ast-check	error	1	2026-10-23 12:44:54	2026-10-23 12:44:54	zpack	unused local variable
-ast-check	error	22	2026-10-22 19:01:43	2026-10-27 18:13:37	zpack	use of undeclared identifier '…'
+ast-check	error	56	2026-10-22 19:01:43	2026-10-28 18:01:07	zpack	use of undeclared identifier '…'
 compile	error	4	2026-10-23 14:25:21	2026-10-27 12:51:49	zpack	ambiguous coercion of division operands '…' and '…'; non-zero remainder '…'
 compile	error	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	duplicate struct member name '…'
 compile	error	1	2026-10-23 12:17:49	2026-10-23 12:17:49	zpack	expected '…' after declaration
