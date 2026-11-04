@@ -131,7 +131,7 @@ fn runHook(c: vars.Ctx) !void {
         // rather than every .zig file in the tree.
         const t = since orelse return;
         const run = hook.bashFromPayload(c.gpa, payload) orelse return;
-        const roots = try hook.bashRoots(c.gpa, run.cwd, vars.home(c) catch "/", run.command);
+        const roots = try hook.bashRoots(c.gpa, run.cwd, vars.home(c) catch null, run.command);
         walk_notice = try changedZig(c, roots, t, &paths);
     } else {
         const path = (hook.filePathFromPayload(c.gpa, payload) catch return) orelse return;
@@ -179,10 +179,11 @@ fn addNotices(gpa: std.mem.Allocator, notices: *std.ArrayList([]const u8), new: 
     }
 }
 
-/// Most `.zig` files one Bash run is checked for, and most directory entries walked to find
-/// them. Both bound the hook's cost when the working directory is large (`/`, a home dir).
+/// Most `.zig` files one Bash run checks (the newest, when more changed), and most directory
+/// entries walked to find them. The walk covers the whole home directory, which costs about
+/// 30 ms per 70k entries; the entry cap only stops a pathological tree.
 const max_bash_files = 20;
-const max_walk_entries = 50_000;
+const max_walk_entries = 500_000;
 
 /// Directories never walked: build output, caches, VCS and dependency trees.
 fn skipDir(name: []const u8) bool {
@@ -192,12 +193,21 @@ fn skipDir(name: []const u8) bool {
     return false;
 }
 
-/// Collect `.zig` files under `roots` modified after `since`. Returns a notice when a budget
-/// cut the search short — "no findings" must never hide "not everything was checked".
+const Changed = struct { path: []const u8, mtime: i96 };
+
+fn newerFirst(_: void, a: Changed, b: Changed) bool {
+    if (a.mtime != b.mtime) return a.mtime > b.mtime;
+    return std.mem.order(u8, a.path, b.path) == .lt; // ties: a stable, repeatable order
+}
+
+/// Collect `.zig` files under `roots` modified after `since`, newest first, at most
+/// `max_bash_files`. Returns a notice when files were left unchecked — "no findings" must
+/// never hide "not everything was checked" — and an empty string otherwise.
 fn changedZig(c: vars.Ctx, roots: []const []const u8, since: i96, out: *std.ArrayList([]const u8)) ![]const u8 {
+    var found: std.ArrayList(Changed) = .empty;
     var seen: usize = 0;
-    var truncated = false;
-    for (roots) |root| {
+    var cut_root: ?[]const u8 = null;
+    roots: for (roots) |root| {
         var dir = std.Io.Dir.cwd().openDir(c.io, root, .{ .iterate = true }) catch continue;
         defer dir.close(c.io);
         var walker = try dir.walkSelectively(c.gpa);
@@ -205,8 +215,8 @@ fn changedZig(c: vars.Ctx, roots: []const []const u8, since: i96, out: *std.Arra
         while (walker.next(c.io) catch null) |entry| {
             seen += 1;
             if (seen > max_walk_entries) {
-                truncated = true;
-                break;
+                cut_root = root;
+                break :roots;
             }
             switch (entry.kind) {
                 .directory => if (!skipDir(entry.basename)) walker.enter(c.io, entry) catch {}, // zsnag:ok — an unreadable directory is skipped, not fatal
@@ -214,19 +224,29 @@ fn changedZig(c: vars.Ctx, roots: []const []const u8, since: i96, out: *std.Arra
                     if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
                     const st = dir.statFile(c.io, entry.path, .{}) catch continue;
                     if (st.mtime.nanoseconds <= since) continue;
-                    if (out.items.len == max_bash_files) {
-                        truncated = true;
-                        break;
-                    }
-                    try out.append(c.gpa, try std.fs.path.join(c.gpa, &.{ root, entry.path }));
+                    try found.append(c.gpa, .{ .path = try std.fs.path.join(c.gpa, &.{ root, entry.path }), .mtime = st.mtime.nanoseconds });
                 },
                 else => {},
             }
         }
     }
-    if (!truncated) return "";
-    return std.fmt.allocPrint(c.gpa, "\n\n⚠ a shell command changed .zig files, but the search stopped at its limit " ++
-        "({d} files / {d} entries) — run `zcanon check <file>` on anything it did not list.", .{ max_bash_files, max_walk_entries });
+
+    std.mem.sortUnstable(Changed, found.items, {}, newerFirst);
+    const keep = @min(found.items.len, max_bash_files);
+    for (found.items[0..keep]) |f| try out.append(c.gpa, f.path);
+
+    var notice: std.Io.Writer.Allocating = .init(c.gpa);
+    const w = &notice.writer;
+    if (found.items.len > keep) {
+        try w.print("\n\n⚠ the shell command changed {d} .zig files; only the {d} newest were checked. " ++
+            "Run `zcanon check <file>` on the others:", .{ found.items.len, keep });
+        for (found.items[keep..]) |f| try w.print("\n  {s}", .{f.path});
+    }
+    if (cut_root) |r| {
+        try w.print("\n\n⚠ the search for edited .zig files stopped after {d} entries in {s}; " ++
+            "files beyond that were not checked. If this command edited Zig there, run `zcanon check <file>`.", .{ max_walk_entries, r });
+    }
+    return notice.written();
 }
 
 /// The stamp's modification time, or null if there is no stamp yet.

@@ -319,38 +319,41 @@ test "a Bash payload missing cwd or command yields null" {
     try testing.expect(hook.bashFromPayload(a.allocator(), "not json") == null);
 }
 
-fn expectRoots(want: []const []const u8, cwd: []const u8, command: []const u8) !void {
+fn expectRoots(want: []const []const u8, home: ?[]const u8, cwd: []const u8, command: []const u8) !void {
     var a = arena();
     defer a.deinit();
-    const got = try hook.bashRoots(a.allocator(), cwd, "/home/u", command);
+    const got = try hook.bashRoots(a.allocator(), cwd, home, command);
     try testing.expectEqual(want.len, got.len);
     for (want, got) |w, g| try testing.expectEqualStrings(w, g);
 }
 
-test "roots: the working directory alone for a plain command" {
-    try expectRoots(&.{"/home/u/ws"}, "/home/u/ws", "sed -i 's/x/y/' src/a.zig");
+test "roots: the home directory covers a working directory inside it" {
+    try expectRoots(&.{"/home/u"}, "/home/u", "/home/u/ws", "sed -i 's/x/y/' src/a.zig");
 }
 
-test "roots: a cd outside the working directory is walked too" {
-    try expectRoots(&.{ "/home/u/ws", "/home/u/other" }, "/home/u/ws", "cd ~/other && python3 - <<'EOF'");
-    try expectRoots(&.{ "/home/u/ws", "/srv/repo" }, "/home/u/ws", "cd \"/srv/repo\"; zig fmt .");
+test "roots: a working directory outside home is walked too" {
+    try expectRoots(&.{ "/home/u", "/srv/repo" }, "/home/u", "/srv/repo", "zig fmt .");
 }
 
-test "roots: a cd beneath the working directory is already covered" {
-    try expectRoots(&.{"/home/u/ws"}, "/home/u/ws", "cd sub/dir && sed -i x main.zig");
+test "roots: cd targets and ~ in the command are ignored" {
+    // `~` is the caller's home, which need not be this process's (host session, hook in a
+    // container): a host `cd ~` used to walk the whole container home.
+    try expectRoots(&.{"/home/u"}, "/home/u", "/home/u/ws", "cd ~ && cd ~/other && cd /srv/repo; cd -");
+    try expectRoots(&.{"/home/u"}, "/home/u", "/home/u/ws", "cat > ~/lib/src/m.zig");
 }
 
-test "roots: an absolute .zig path adds its directory" {
-    try expectRoots(&.{ "/home/u/ws", "/tmp/scratch" }, "/home/u/ws", "sed -i 's/a/b/' /tmp/scratch/t.zig");
-    try expectRoots(&.{ "/home/u/ws", "/home/u/lib/src" }, "/home/u/ws", "cat > ~/lib/src/m.zig");
+test "roots: an absolute .zig path outside the roots adds its directory" {
+    try expectRoots(&.{ "/home/u", "/tmp/scratch" }, "/home/u", "/home/u/ws", "sed -i 's/a/b/' /tmp/scratch/t.zig");
+    try expectRoots(&.{ "/home/u", "/tmp/q" }, "/home/u", "/home/u/ws", "cat >\"/tmp/q/x.zig\" <<'EOF'");
+    try expectRoots(&.{"/home/u"}, "/home/u", "/home/u/ws", "zig fmt /home/u/lib/m.zig");
 }
 
-test "roots: a working directory nested in a cd target is dropped, duplicates collapse" {
-    try expectRoots(&.{"/home/u"}, "/home/u/ws", "cd ~ && cd ~/ && cd /home/u/ws");
+test "roots: no HOME means the working directory, never /" {
+    try expectRoots(&.{"/home/u/ws"}, null, "/home/u/ws", "cd / && ls");
 }
 
-test "roots: `cd -` and a bare trailing cd add nothing" {
-    try expectRoots(&.{"/home/u/ws"}, "/home/u/ws", "cd - && echo cd");
+test "roots: duplicates and trailing slashes collapse" {
+    try expectRoots(&.{"/home/u"}, "/home/u/", "/home/u", "sed -i x /home/u/a.zig");
 }
 
 // ---- the short view ---------------------------------------------------------

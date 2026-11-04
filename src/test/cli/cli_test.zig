@@ -800,3 +800,67 @@ test "cli: the daemon recovers when only build.zig.zon is fixed" {
     }
     try testing.expect(ok);
 }
+
+// ---- shell edits (Bash) -------------------------------------------------------
+
+/// A sandbox home with a stamp: the first Bash hook run only creates the stamp (there is
+/// nothing to compare against yet) and reports nothing.
+fn bashHome(s: *h.Sandbox) ![2][2][]const u8 {
+    const home = try s.path("home");
+    try std.Io.Dir.cwd().createDirPath(s.io, home);
+    const env = [2][2][]const u8{ .{ "HOME", home }, .{ "ZCANON_STAMP", try s.path("stamp") } };
+    const first = try s.hookBash(home, "true", &env);
+    try testing.expectEqualStrings("", first.stdout);
+    try testing.expect(s.exists("stamp"));
+    return env;
+}
+
+/// Give `rel` a modification time `secs` seconds after the stamp's: a file written right after
+/// the stamp can share its timestamp on a coarse-clock filesystem and would not count as changed.
+fn touchAfterStamp(s: *h.Sandbox, rel: []const u8, secs: usize) !void {
+    const stamp = try std.Io.Dir.cwd().statFile(s.io, try s.path("stamp"), .{});
+    const t = stamp.mtime.nanoseconds + @as(i96, @intCast(secs)) * std.time.ns_per_s;
+    try std.Io.Dir.cwd().setTimestamps(s.io, try s.path(rel), .{ .modify_timestamp = .{ .new = .fromNanoseconds(t) } });
+}
+
+test "cli: a Bash run finds edits anywhere under home, ignoring cd and ~" {
+    var s = try box("bash-home");
+    defer s.deinit();
+    const env = try bashHome(&s);
+
+    // Nothing edited: `cd ~` must stay silent (it used to report a truncated search).
+    const quiet = try s.hookBash(try s.path("home"), "cd ~; ls", &env);
+    try testing.expectEqualStrings("", quiet.stdout);
+
+    // An edit deep under home is found although the command never names its directory;
+    // one under a dot-directory is not walked.
+    _ = try s.write("home/a/b/deep.zig", dirty_zig);
+    _ = try s.write("home/.hidden/x.zig", dirty_zig);
+    try touchAfterStamp(&s, "home/a/b/deep.zig", 1);
+    try touchAfterStamp(&s, "home/.hidden/x.zig", 1);
+    const r = try s.hookBash("/nonexistent", "cd ~ && python3 edit.py", &env);
+    const ctx = (try h.additionalContext(s.gpa(), r.stdout)).?;
+    try testing.expect(std.mem.find(u8, ctx, "deep.zig") != null);
+    try testing.expect(std.mem.find(u8, ctx, "x.zig") == null);
+    try testing.expect(std.mem.find(u8, ctx, "search for edited .zig files stopped") == null);
+}
+
+test "cli: a Bash run that changed many .zig files checks the newest and lists the rest" {
+    var s = try box("bash-newest");
+    defer s.deinit();
+    const env = try bashHome(&s);
+
+    // 22 files with explicit, increasing mtimes after the stamp: f0 and f1 are the oldest.
+    for (0..22) |i| {
+        const rel = try s.gpa().print("home/ws/f{d}.zig", .{i});
+        _ = try s.write(rel, clean_zig);
+        try touchAfterStamp(&s, rel, i + 1);
+    }
+    const r = try s.hookBash(try s.path("home/ws"), "zig fmt .", &env);
+    const ctx = (try h.additionalContext(s.gpa(), r.stdout)).?;
+    try testing.expect(std.mem.find(u8, ctx, "changed 22 .zig files; only the 20 newest were checked") != null);
+    const rest = ctx[std.mem.find(u8, ctx, "on the others:").?..];
+    try testing.expect(std.mem.find(u8, rest, "f0.zig") != null);
+    try testing.expect(std.mem.find(u8, rest, "f1.zig") != null);
+    try testing.expect(std.mem.find(u8, rest, "f21.zig") == null);
+}

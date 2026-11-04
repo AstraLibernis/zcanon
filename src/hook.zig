@@ -118,30 +118,26 @@ pub fn bashFromPayload(arena: std.mem.Allocator, payload: []const u8) ?BashRun {
     return .{ .cwd = strField(obj, "cwd") orelse return null, .command = strField(ti, "command") orelse return null };
 }
 
-/// The directories a shell command could have edited .zig files in: the session's working
-/// directory, every `cd` target in the command, and the directory of every absolute (or `~/`)
-/// path ending in `.zig`. Relative `cd` targets resolve against `cwd`. Roots nested inside
-/// another root are dropped, so no tree is walked twice.
+/// The directories searched for .zig files a shell command may have edited: the home
+/// directory, the session's working directory, and the directory of every absolute path in the
+/// command ending in `.zig`. Roots nested inside another root are dropped, so no tree is walked
+/// twice; a root that does not exist is skipped by the walker.
 ///
-/// This is deliberately a superset: which files actually changed is decided by modification
-/// time, not by parsing shell. A root that does not exist is simply skipped by the walker.
-pub fn bashRoots(arena: std.mem.Allocator, cwd: []const u8, home: []const u8, command: []const u8) ![]const []const u8 {
+/// The command text is NOT parsed for `cd` targets or `~`. Which files changed is decided by
+/// modification time alone, so the roots only bound where to look — and `~` in a command means
+/// the CALLER's home, which is not this process's home when the hook runs in a container for a
+/// host session (a host `cd ~` used to send the walk through the whole container home). `home`
+/// is null when HOME is unset; the walk is then limited to `cwd` and the named files, never `/`.
+pub fn bashRoots(arena: std.mem.Allocator, cwd: []const u8, home: ?[]const u8, command: []const u8) ![]const []const u8 {
     var roots: std.ArrayList([]const u8) = .empty;
+    if (home) |h| try roots.append(arena, h);
     try roots.append(arena, cwd);
 
-    var toks: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.tokenizeAny(u8, command, " \t\r\n;&|()");
-    while (it.next()) |t| try toks.append(arena, std.mem.trim(u8, t, "\"'"));
-
-    for (toks.items, 0..) |t, i| {
-        if (std.mem.eql(u8, t, "cd") and i + 1 < toks.items.len) {
-            const target = toks.items[i + 1];
-            if (target.len == 0 or target[0] == '-') continue;
-            try roots.append(arena, try expand(arena, cwd, home, target));
-        } else if (std.mem.endsWith(u8, t, ".zig") and (t[0] == '/' or std.mem.startsWith(u8, t, "~/"))) {
-            const full = try expand(arena, cwd, home, t);
-            try roots.append(arena, std.fs.path.dirname(full) orelse continue);
-        }
+    var it = std.mem.tokenizeAny(u8, command, " \t\r\n;&|()<>");
+    while (it.next()) |raw| {
+        const t = std.mem.trim(u8, raw, "\"'");
+        if (!std.mem.endsWith(u8, t, ".zig") or !std.fs.path.isAbsolute(t)) continue;
+        try roots.append(arena, std.fs.path.dirname(t) orelse continue);
     }
 
     var uniq: std.ArrayList([]const u8) = .empty;
@@ -159,13 +155,6 @@ pub fn bashRoots(arena: std.mem.Allocator, cwd: []const u8, home: []const u8, co
         if (!nested) try out.append(arena, r);
     }
     return out.items;
-}
-
-fn expand(arena: std.mem.Allocator, cwd: []const u8, home: []const u8, p: []const u8) ![]const u8 {
-    if (std.mem.eql(u8, p, "~")) return home;
-    if (std.mem.startsWith(u8, p, "~/")) return std.fs.path.join(arena, &.{ home, p[2..] });
-    if (std.fs.path.isAbsolute(p)) return p;
-    return std.fs.path.resolve(arena, &.{ cwd, p });
 }
 
 /// `inner` lies strictly beneath `outer` (both without a trailing slash, except `/` itself).

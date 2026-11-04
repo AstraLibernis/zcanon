@@ -125,6 +125,15 @@ pub const Sandbox = struct {
         return s.runToolEnv("zcanon", &.{"hook"}, payload, extra);
     }
 
+    /// `zcanon hook` as after a Bash call run in `cwd`, with extra environment.
+    pub fn hookBash(s: *Sandbox, cwd: []const u8, command: []const u8, extra: []const [2][]const u8) !Result {
+        const payload = try s.gpa().print(
+            "{{\"tool_name\":\"Bash\",\"cwd\":{f},\"tool_input\":{{\"command\":{f}}}}}",
+            .{ std.json.fmt(cwd, .{}), std.json.fmt(command, .{}) },
+        );
+        return s.runToolEnv("zcanon", &.{"hook"}, payload, extra);
+    }
+
     /// `zcanon <args...>` with an arbitrary stdin payload — for exercising malformed input.
     pub fn zcanonStdin(s: *Sandbox, args: []const []const u8, stdin: []const u8) !Result {
         return s.runTool("zcanon", args, stdin);

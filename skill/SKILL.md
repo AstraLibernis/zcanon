@@ -41,7 +41,7 @@ the book reader). No `nu`, no `sqlite3`, no environment variables to set.
 
 The PostToolUse hook feeds back, on every `.zig` edit — through Edit/Write, or through a shell
 command (`sed -i`, a heredoc, a script, `zig fmt`): after each Bash call it checks every `.zig`
-file modified since the previous tool call, under the working directory and any `cd` target:
+file modified since the previous tool call anywhere under your home directory (dot-directories and build output skipped) or the working directory, newest first, up to 20 per call:
 - `zig ast-check` — real syntax/compile errors
 - `zsnag` — known LLM footguns (the list below)
 

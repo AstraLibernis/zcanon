@@ -13,7 +13,7 @@ const vars = @import("vars.zig");
 
 pub const MARKER = "zcanon-zig-hook";
 /// `Bash` is in the list because a shell command can edit a .zig file too (`sed -i`, a heredoc,
-/// `zig fmt`); the hook finds those by modification time, see `hook.bashRoots`.
+/// `zig fmt`); the hook finds those by modification time under home + cwd, see `hook.bashRoots`.
 pub const MATCHER = "Edit|Write|MultiEdit|Bash";
 pub const TIMEOUT_SECS = 30;
 
