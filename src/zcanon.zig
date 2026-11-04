@@ -409,8 +409,7 @@ const Run = struct {
         if (version.finish(c)) |v| r.zver = std.mem.trim(u8, v, " \t\r\n");
         // The syntax check runs on the std this binary was built with.
         if (!std.mem.eql(u8, r.zver, "unknown") and !std.mem.eql(u8, r.zver, builtin.zig_version_string))
-            try r.notices.append(c.gpa, try std.fmt.allocPrint(
-                c.gpa,
+            try r.notices.append(c.gpa, try c.gpa.print(
                 "\n\n⚠ zcanon was built with zig {s} but `zig` is {s}: the syntax check follows {s}. " ++
                     "Rebuild zcanon (`zig build`) with the new zig.",
                 .{ builtin.zig_version_string, r.zver, builtin.zig_version_string },
@@ -418,15 +417,13 @@ const Run = struct {
         if (loaded) |m| {
             r.map = m;
             if (try zephem.staleness(c, r.zver)) |warn|
-                try r.notices.append(c.gpa, try std.fmt.allocPrint(c.gpa, "\n\n{s}", .{warn}));
+                try r.notices.append(c.gpa, try c.gpa.print("\n\n{s}", .{warn}));
             r.stale = try snag.stalePremises(c.gpa, &r.map.?);
-            for (r.stale) |id| try r.notices.append(c.gpa, try std.fmt.allocPrint(
-                c.gpa,
+            for (r.stale) |id| try r.notices.append(c.gpa, try c.gpa.print(
                 "\n\n⚠ rule {s} is DISABLED — the map contradicts its premise: {s}",
                 .{ snag.ruleOf(id).code, snag.ruleOf(id).premise },
             ));
-        } else |e| try r.notices.append(c.gpa, try std.fmt.allocPrint(
-            c.gpa,
+        } else |e| try r.notices.append(c.gpa, try c.gpa.print(
             "\n\n⚠ R011/R012/R013 (the zephem map rules) did NOT run — {s}",
             .{switch (e) {
                 error.NoLookupTable => zephem.remedy,
@@ -444,8 +441,8 @@ const Run = struct {
         for (r.sem.items) |s| {
             const rep = s.reply;
             switch (rep.sem) {
-                .starting => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⋯ the background compiler for {s} is on its first build; its errors follow on a later edit.", .{s.root})}),
-                .down => try addNotices(c.gpa, notices, &.{try std.fmt.allocPrint(c.gpa, "\n\n⚠ semantic checks are down for {s}: {s}", .{ s.root, rep.detail })}),
+                .starting => try addNotices(c.gpa, notices, &.{try c.gpa.print("\n\n⋯ the background compiler for {s} is on its first build; its errors follow on a later edit.", .{s.root})}),
+                .down => try addNotices(c.gpa, notices, &.{try c.gpa.print("\n\n⚠ semantic checks are down for {s}: {s}", .{ s.root, rep.detail })}),
                 .ok, .errors => {
                     // A build that finished after the newest edit speaks for the project now:
                     // record its errors, and close the ones it no longer reports.
@@ -453,7 +450,7 @@ const Run = struct {
                         var fresh: std.ArrayList(book.Record) = .empty;
                         for (rep.diags) |d| {
                             if (!std.mem.eql(u8, d.severity, "error")) continue;
-                            const abs = try std.fs.path.resolve(c.gpa, &.{ s.root, d.path });
+                            const abs = try std.fs.path.resolveAlloc(c.gpa, &.{ s.root, d.path });
                             try fresh.append(c.gpa, r.recordOf(abs, book.COMPILE_RULE, "error", d.line, d.col, d.message, ""));
                         }
                         r.record(.{ .under = s.root }, fresh.items, &.{book.GROUP_COMPILE});
@@ -462,9 +459,9 @@ const Run = struct {
                     // Drop what the syntax check already reported for a file checked this run.
                     var diags: std.ArrayList(semantic.Diag) = .empty;
                     for (rep.diags) |d| {
-                        const abs = try std.fs.path.resolve(c.gpa, &.{ s.root, d.path });
+                        const abs = try std.fs.path.resolveAlloc(c.gpa, &.{ s.root, d.path });
                         const dup = for (r.ast_seen.items) |a| {
-                            const same_file = std.mem.eql(u8, try std.fs.path.resolve(c.gpa, &.{a.path}), abs);
+                            const same_file = std.mem.eql(u8, try std.fs.path.resolveAlloc(c.gpa, &.{a.path}), abs);
                             if (same_file and a.f.line == d.line and a.f.col == d.col and std.mem.eql(u8, a.f.message, d.message)) break true;
                         } else false;
                         if (!dup) try diags.append(c.gpa, d);
@@ -612,7 +609,7 @@ const Run = struct {
             };
         };
         const e = r.ledger_failed orelse return "";
-        return std.fmt.allocPrint(r.c.gpa, "\n\n⚠ the book was not updated ({s}) — findings above are still valid.", .{@errorName(e)}) catch "";
+        return r.c.gpa.print("\n\n⚠ the book was not updated ({s}) — findings above are still valid.", .{@errorName(e)}) catch "";
     }
 };
 
@@ -782,7 +779,7 @@ fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
     const dir = if (args.len > 0) args[0] else ".";
     const path = try std.fs.path.join(c.gpa, &.{ dir, "build.zig" });
     const src = std.Io.Dir.cwd().readFileAllocOptions(c.io, path, c.gpa, .unlimited, .of(u8), 0) catch
-        return fail(c, try std.fmt.allocPrint(c.gpa, "no build.zig in {s}\n", .{dir}));
+        return fail(c, try c.gpa.print("no build.zig in {s}\n", .{dir}));
     const edited = semantic.addCheck(c.gpa, src) catch |e| return fail(c, switch (e) {
         error.AlreadyAdded => "build.zig already has zcanon's check step.\n",
         error.BuildZigInvalid => "build.zig does not parse; fix it first.\n",
@@ -795,7 +792,7 @@ fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
     try std.Io.Dir.cwd().createDirPath(c.io, backup_dir);
     var name: [16]u8 = undefined;
     _ = std.fmt.bufPrint(&name, "{x:0>16}", .{std.hash.Wyhash.hash(0, path)}) catch unreachable; // zsnag:ok — 16 hex digits fit exactly
-    const backup = try std.fmt.allocPrint(c.gpa, "{s}/{s}-build.zig", .{ backup_dir, &name });
+    const backup = try c.gpa.print("{s}/{s}-build.zig", .{ backup_dir, &name });
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = backup, .data = src });
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = edited });
 
@@ -807,7 +804,7 @@ fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
     if (!ok) {
         try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = src });
         const why = if (listed) |res| std.mem.trim(u8, res.stderr, " \t\r\n") else "could not run `zig build -l`";
-        return fail(c, try std.fmt.allocPrint(c.gpa, "adding the check step broke the build, so build.zig was restored:\n{s}\n", .{why}));
+        return fail(c, try c.gpa.print("adding the check step broke the build, so build.zig was restored:\n{s}\n", .{why}));
     }
     var buf: [1024]u8 = undefined;
     var w = stdout(c, &buf);
@@ -825,7 +822,7 @@ fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
 fn runTargets(c: vars.Ctx, args: []const []const u8) !void {
     const dir = try vars.absolute(c, if (args.len > 0) args[0] else ".");
     const root = (try semantic.projectRoot(c.gpa, c.io, try std.fs.path.join(c.gpa, &.{ dir, "x.zig" }))) orelse
-        return fail(c, try std.fmt.allocPrint(c.gpa, "no build.zig at or above {s}\n", .{dir}));
+        return fail(c, try c.gpa.print("no build.zig at or above {s}\n", .{dir}));
     const path = try daemon.targetsPath(c);
     var buf: [1024]u8 = undefined;
     var w = stdout(c, &buf);
@@ -834,7 +831,7 @@ fn runTargets(c: vars.Ctx, args: []const []const u8) !void {
         for (args[1..]) |t| {
             if (std.mem.eql(u8, t, "none")) continue;
             _ = std.Target.Query.parse(.{ .arch_os_abi = t }) catch
-                return fail(c, try std.fmt.allocPrint(c.gpa, "not a Zig target triple: {s} (try x86_64-windows, aarch64-macos)\n", .{t}));
+                return fail(c, try c.gpa.print("not a Zig target triple: {s} (try x86_64-windows, aarch64-macos)\n", .{t}));
             try set.append(c.gpa, t);
         }
         try semantic.writeTargets(c.gpa, c.io, path, root, set.items);
@@ -857,7 +854,7 @@ fn runDaemon(c: vars.Ctx, args: []const []const u8) !void {
     const dir = try vars.absolute(c, if (args.len > 1) args[1] else ".");
     const probe = try std.fs.path.join(c.gpa, &.{ dir, "x.zig" });
     const root = (try semantic.projectRoot(c.gpa, c.io, probe)) orelse
-        return fail(c, try std.fmt.allocPrint(c.gpa, "no build.zig at or above {s}\n", .{dir}));
+        return fail(c, try c.gpa.print("no build.zig at or above {s}\n", .{dir}));
     var buf: [4096]u8 = undefined;
     var w = stdout(c, &buf);
     if (daemon.unusable(c, root)) |why| {
@@ -953,10 +950,10 @@ fn runPublish(c: vars.Ctx, args: []const []const u8) !void {
         const dir = if (args.len > 1) args[1] else (publish.defaultRepo(c) orelse
             return fail(c, "this zcanon binary is not inside a git checkout; name the repo: zcanon book publish on <repo>\n"));
         const repo = publish.repoRoot(c, dir) orelse
-            return fail(c, try std.fmt.allocPrint(c.gpa, "{s} is not inside a git checkout\n", .{dir}));
+            return fail(c, try c.gpa.print("{s} is not inside a git checkout\n", .{dir}));
         const flag = try publish.repoFlagPath(c);
         try std.Io.Dir.cwd().createDirPath(c.io, std.fs.path.dirname(flag) orelse ".");
-        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = flag, .data = try std.fmt.allocPrint(c.gpa, "{s}\n", .{repo}) });
+        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = flag, .data = try c.gpa.print("{s}\n", .{repo}) });
         try w.interface.print("daily publish on: {s}/{s}/ (the hook starts it at most once a day)\n", .{ repo, publish.dir_name });
     } else if (std.mem.eql(u8, sub, "off")) {
         std.Io.Dir.cwd().deleteFile(c.io, try publish.repoFlagPath(c)) catch |e| switch (e) {
@@ -979,11 +976,11 @@ fn runPublish(c: vars.Ctx, args: []const []const u8) !void {
         var sbuf: [20]u8 = undefined;
         const when = book.stamp(&sbuf, book.nowSeconds(c.io)) catch "?";
         const line = switch (outcome) {
-            .pushed => |p| try std.fmt.allocPrint(c.gpa, "{s} pushed {s} ({d} rows) to {s}/{s}/", .{ when, p.commit, p.rows, repo, publish.dir_name }),
-            .unchanged => try std.fmt.allocPrint(c.gpa, "{s} nothing new to publish", .{when}),
-            .failed => |why| try std.fmt.allocPrint(c.gpa, "{s} FAILED: {s}", .{ when, why }),
+            .pushed => |p| try c.gpa.print("{s} pushed {s} ({d} rows) to {s}/{s}/", .{ when, p.commit, p.rows, repo, publish.dir_name }),
+            .unchanged => try c.gpa.print("{s} nothing new to publish", .{when}),
+            .failed => |why| try c.gpa.print("{s} FAILED: {s}", .{ when, why }),
         };
-        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try publish.sidePath(c, "publish.log"), .data = try std.fmt.allocPrint(c.gpa, "{s}\n", .{line}) });
+        try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try publish.sidePath(c, "publish.log"), .data = try c.gpa.print("{s}\n", .{line}) });
         if (auto) return;
         try w.interface.print("{s}\n", .{line});
         try w.interface.flush();

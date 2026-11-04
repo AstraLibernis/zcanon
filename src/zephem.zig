@@ -286,8 +286,7 @@ pub fn staleness(c: vars.Ctx, zig_version: []const u8) !?[]const u8 {
     const pinned = std.mem.trim(u8, std.mem.trimStart(u8, first, "zig "), " \t\r");
     if (std.mem.eql(u8, pinned, zig_version)) return null;
 
-    return try std.fmt.allocPrint(
-        c.gpa,
+    return try c.gpa.print(
         "⚠ the zephem map is pinned to zig {s} but you are on {s} — map-derived findings are " ++
             "UNVERIFIED until you regenerate: `zephem std && zephem lookup`.",
         .{ pinned, zig_version },

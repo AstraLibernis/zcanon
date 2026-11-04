@@ -208,14 +208,14 @@ test "cli: a file's first scan is a baseline: old code is not counted, the edit'
     defer s.deinit();
     // An existing file with a mistake zcanon has never seen, then an Edit elsewhere in it.
     const f = try s.write("t.zig", dirty_zig);
-    const edit = try std.fmt.allocPrint(s.gpa(), "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f},\"new_string\":\"_ = n;\"}}}}", .{std.json.fmt(f, .{})});
+    const edit = try s.gpa().print("{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f},\"new_string\":\"_ = n;\"}}}}", .{std.json.fmt(f, .{})});
     _ = try s.zcanonStdin(&.{"hook"}, edit);
     try testing.expect(std.mem.find(u8, try s.read("config/open.tsv"), "R004") != null); // tracked
     try testing.expect((try s.zcanon(&.{"book"})).outContains("the book is empty")); // not counted
 
     // Now an Edit that writes a second `catch unreachable` of its own: counted.
     _ = try s.write("t.zig", dirty_zig ++ "fn g() void {\n    bar() catch unreachable;\n}\n");
-    const edit2 = try std.fmt.allocPrint(s.gpa(), "{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f},\"new_string\":\"    bar() catch unreachable;\"}}}}", .{std.json.fmt(f, .{})});
+    const edit2 = try s.gpa().print("{{\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{f},\"new_string\":\"    bar() catch unreachable;\"}}}}", .{std.json.fmt(f, .{})});
     _ = try s.zcanonStdin(&.{"hook"}, edit2);
     try testing.expect((try s.zcanon(&.{ "book", "R004" })).outContains("    1×"));
 }

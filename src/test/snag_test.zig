@@ -56,7 +56,7 @@ test "every rule has a unique code, a severity and a message" {
     for (ids, 1..) |id, n| {
         var buf: [8]u8 = undefined;
         try testing.expectEqualStrings(
-            try std.fmt.bufPrint(&buf, "R{d:0>3}", .{n}),
+            try std.mem.print(&buf, "R{d:0>3}", .{n}),
             snag.ruleOf(id).code,
         );
     }

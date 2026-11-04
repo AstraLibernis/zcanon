@@ -281,7 +281,7 @@ pub fn maybeStart(c: vars.Ctx) void {
     // Claimed before starting, so two hooks in the same second cannot both start one, and a
     // failing publish is retried tomorrow rather than on every tool call.
     var buf: [24]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "{d}\n", .{now}) catch return;
+    const text = std.mem.print(&buf, "{d}\n", .{now}) catch return;
     std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = stamp_path, .data = text }) catch return;
     const self = vars.selfExe(c) catch return;
     _ = std.process.spawn(c.io, .{
@@ -321,7 +321,7 @@ fn git(c: vars.Ctx, cwd: []const u8, args: []const []const u8) !Git {
 fn must(c: vars.Ctx, cwd: []const u8, args: []const []const u8, why: *[]const u8) !Git {
     const g = try git(c, cwd, args);
     if (!g.ok) {
-        why.* = try std.fmt.allocPrint(c.gpa, "git {s} failed: {s}", .{ args[0], g.err });
+        why.* = try c.gpa.print("git {s} failed: {s}", .{ args[0], g.err });
         return error.GitFailed;
     }
     return g;
@@ -402,11 +402,11 @@ fn attemptOnce(c: vars.Ctx, repo: []const u8, entries: []const book.Entry, why: 
     _ = try must(c, wt, &.{ "add", "--", dir_name }, why);
     if ((try git(c, wt, &.{ "diff", "--cached", "--quiet" })).ok) return .unchanged;
     var sbuf: [20]u8 = undefined;
-    const msg = try std.fmt.allocPrint(c.gpa, "history: mistake log as of {s}", .{book.stamp(&sbuf, book.nowSeconds(c.io)) catch "now"});
+    const msg = try c.gpa.print("history: mistake log as of {s}", .{book.stamp(&sbuf, book.nowSeconds(c.io)) catch "now"});
     _ = try must(c, wt, &.{ "commit", "--quiet", "-m", msg }, why);
-    const push = try git(c, wt, &.{ "push", "--quiet", "origin", try std.fmt.allocPrint(c.gpa, "HEAD:refs/heads/{s}", .{branch}) });
+    const push = try git(c, wt, &.{ "push", "--quiet", "origin", try c.gpa.print("HEAD:refs/heads/{s}", .{branch}) });
     if (!push.ok) {
-        why.* = try std.fmt.allocPrint(c.gpa, "git push failed: {s}", .{push.err});
+        why.* = try c.gpa.print("git push failed: {s}", .{push.err});
         return error.PushRejected;
     }
     const sha = try must(c, wt, &.{ "rev-parse", "--short", "HEAD" }, why);

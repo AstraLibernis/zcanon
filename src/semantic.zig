@@ -146,7 +146,7 @@ const twins_body =
 /// rewritten only when they differ, so an identical write does not restart the watcher.
 pub fn writeWrapper(gpa: std.mem.Allocator, io: std.Io, dir: []const u8, root: []const u8, targets: []const []const u8) !void {
     try std.Io.Dir.cwd().createDirPath(io, dir);
-    const rel = try std.fs.path.relative(gpa, "/", null, dir, root);
+    const rel = try std.fs.path.relativeAlloc(gpa, "/", null, dir, root);
 
     var build: std.ArrayList(u8) = .empty;
     try build.appendSlice(gpa,
@@ -178,7 +178,7 @@ pub fn writeWrapper(gpa: std.mem.Allocator, io: std.Io, dir: []const u8, root: [
     try build.appendSlice(gpa, "}\n");
 
     // The fingerprint is Zig's package identity; this one is valid for the name below.
-    const zon = try std.fmt.allocPrint(gpa,
+    const zon = try gpa.print(
         \\.{{
         \\    .name = .zcanon_wrap,
         \\    .version = "0.0.0",

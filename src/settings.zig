@@ -25,7 +25,7 @@ const Value = std.json.Value;
 /// path with a space in it (`C:/Users/Jane Doe/...`, `~/My Projects/...`) splits into two
 /// words and the hook never runs.
 pub fn command(gpa: std.mem.Allocator, exe_path: []const u8) ![]u8 {
-    const cmd = try std.fmt.allocPrint(gpa, "\"{s}\" hook  # {s}", .{ exe_path, MARKER });
+    const cmd = try gpa.print("\"{s}\" hook  # {s}", .{ exe_path, MARKER });
     // Windows: Claude Code runs hook commands through Git Bash, where `C:\Users\...` loses
     // every backslash even inside double quotes. Forward slashes work in bash, cmd and PowerShell.
     if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, cmd[1 .. exe_path.len + 1], '\\', '/');
@@ -220,12 +220,12 @@ pub fn save(c: vars.Ctx, path: []const u8, text: []const u8) !void {
 
     if (std.Io.Dir.cwd().readFileAlloc(c.io, path, c.gpa, .unlimited)) |old| {
         defer c.gpa.free(old);
-        const bak = try std.fmt.allocPrint(c.gpa, "{s}.bak", .{path});
+        const bak = try c.gpa.print("{s}.bak", .{path});
         defer c.gpa.free(bak);
         try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = bak, .data = old });
     } else |_| {}
 
-    const tmp = try std.fmt.allocPrint(c.gpa, "{s}.zcanon-tmp", .{path});
+    const tmp = try c.gpa.print("{s}.zcanon-tmp", .{path});
     defer c.gpa.free(tmp);
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = tmp, .data = text });
     try std.Io.Dir.cwd().rename(tmp, std.Io.Dir.cwd(), path, c.io);

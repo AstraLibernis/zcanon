@@ -991,8 +991,7 @@ fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const 
             // made R013 fire 219 times on Zig's own std.
             const prefix_kind = zephem.longestPrefixKind(map.*, buf.items);
             if (check_existence and prefix_kind != null and zephem.isContainerKind(prefix_kind.?)) {
-                const msg = try std.fmt.allocPrint(
-                    gpa,
+                const msg = try gpa.print(
                     "`{s}` is not in the zephem map — cannot verify it exists (check with `zephem look`).",
                     .{buf.items},
                 );
@@ -1006,9 +1005,9 @@ fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const 
         // R011 — deprecation, with the replacement read out of the map.
         if (zephem.isDeprecated(e.doc)) {
             const msg = if (zephem.deprecationOf(e.doc)) |repl|
-                try std.fmt.allocPrint(gpa, "`{s}` is deprecated — the map says: use `{s}`.", .{ buf.items, repl })
+                try gpa.print("`{s}` is deprecated — the map says: use `{s}`.", .{ buf.items, repl })
             else
-                try std.fmt.allocPrint(gpa, "`{s}` is deprecated — the map says: {s}", .{ buf.items, e.doc });
+                try gpa.print("`{s}` is deprecated — the map says: {s}", .{ buf.items, e.doc });
             try st.emitMsg(t[i].start, .r011_deprecated, msg);
         }
 
@@ -1017,8 +1016,7 @@ fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const 
             if (zephem.arityOf(gpa, e.sig)) |want| {
                 const got = countArgs(t, j);
                 if (got != null and got.? != want) {
-                    const msg = try std.fmt.allocPrint(
-                        gpa,
+                    const msg = try gpa.print(
                         "`{s}` takes {d} argument{s}, called with {d}. Signature: {s}",
                         .{ buf.items, want, if (want == 1) "" else "s", got.?, e.sig },
                     );

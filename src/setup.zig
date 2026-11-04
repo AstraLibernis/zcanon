@@ -319,7 +319,7 @@ fn liveTest(c: vars.Ctx, r: *Report, sp: []const u8, mode: Mode) !void {
     const probe = try std.fs.path.join(c.gpa, &.{ dir, "probe.zig" });
     try writeFileMkdir(c, probe, PROBE_SRC);
 
-    const payload = try std.fmt.allocPrint(c.gpa, "{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{f}}}}}", .{std.json.fmt(probe, .{})});
+    const payload = try c.gpa.print("{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{f}}}}}", .{std.json.fmt(probe, .{})});
     const in_path = try std.fs.path.join(c.gpa, &.{ dir, "payload.json" });
     const out_path = try std.fs.path.join(c.gpa, &.{ dir, "out.json" });
     const err_path = try std.fs.path.join(c.gpa, &.{ dir, "err.txt" });
@@ -413,7 +413,7 @@ fn skill(c: vars.Ctx, r: *Report, mode: Mode) !void {
         return;
     }
     if (cur) |old| {
-        const bak = try std.fmt.allocPrint(c.gpa, "{s}.bak", .{dst});
+        const bak = try c.gpa.print("{s}.bak", .{dst});
         try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = bak, .data = old });
         try r.line(.fixed, "skill updated ({s}); the previous one is saved as SKILL.md.bak", .{dst});
     } else {
@@ -468,7 +468,7 @@ pub fn refreshSkillList(c: vars.Ctx, entries: []const book.Entry) void {
 /// A path the model can paste into a shell: quoted only when it has to be.
 fn shellWord(gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
     if (std.mem.findScalar(u8, path, ' ') == null) return path;
-    return std.fmt.allocPrint(gpa, "\"{s}\"", .{path});
+    return gpa.print("\"{s}\"", .{path});
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -654,7 +654,7 @@ fn removeSkill(c: vars.Ctx, r: *Report) !void {
         try r.line(.info, "HOME is not set, so the skill's location is unknown; nothing removed there", .{});
         return;
     };
-    const bak = try std.fmt.allocPrint(c.gpa, "{s}.bak", .{skill_path});
+    const bak = try c.gpa.print("{s}.bak", .{skill_path});
     for ([_][]const u8{ skill_path, bak }) |p| {
         const text = std.Io.Dir.cwd().readFileAlloc(c.io, p, c.gpa, .limited(1 << 20)) catch continue;
         if (!isZcanonSkill(text)) {

@@ -52,7 +52,7 @@ test "select caps the list" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var many: [advice.max_items + 5]book.Entry = undefined;
-    for (&many, 0..) |*m, i| m.* = e("R011", "warn", try std.fmt.allocPrint(arena.allocator(), "api {d}", .{i}), 2 + i, "2026-09-30 00:00:00");
+    for (&many, 0..) |*m, i| m.* = e("R011", "warn", try arena.allocator().print("api {d}", .{i}), 2 + i, "2026-09-30 00:00:00");
     const items = try advice.select(arena.allocator(), &many);
     try testing.expectEqual(advice.max_items, items.len);
     try testing.expectEqual(@as(u64, 2 + many.len - 1), items[0].count);

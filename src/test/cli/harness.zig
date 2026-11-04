@@ -60,7 +60,7 @@ pub const Sandbox = struct {
         // Where `zig build` installed the binaries under test.
         const bin = build_options.bin_dir;
 
-        const dir = try std.fmt.allocPrint(a, ".zig-cache/zcanon-cli/{s}", .{name});
+        const dir = try a.print(".zig-cache/zcanon-cli/{s}", .{name});
         // deleteTree succeeds on an absent path, so a leftover sandbox from a previous run is
         // cleared and a first run is a no-op. Any other failure is real and must surface.
         try std.Io.Dir.cwd().deleteTree(io, dir);
@@ -107,8 +107,7 @@ pub const Sandbox = struct {
     pub fn hook(s: *Sandbox, file: []const u8) !Result {
         // JSON-escape the path: Windows paths carry backslashes, which are invalid JSON
         // escapes when pasted raw (Claude Code itself escapes them).
-        const payload = try std.fmt.allocPrint(
-            s.gpa(),
+        const payload = try s.gpa().print(
             "{{\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{f}}}}}",
             .{std.json.fmt(file, .{})},
         );
@@ -117,8 +116,7 @@ pub const Sandbox = struct {
 
     /// `zcanon hook` with extra environment (name, value pairs).
     pub fn hookEnv(s: *Sandbox, file: []const u8, extra: []const [2][]const u8) !Result {
-        const payload = try std.fmt.allocPrint(
-            s.gpa(),
+        const payload = try s.gpa().print(
             "{{\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{f}}}}}",
             .{std.json.fmt(file, .{})},
         );
@@ -187,9 +185,9 @@ pub const Sandbox = struct {
         // rather than pipes: no reader plumbing, and the raw streams stay on disk for
         // inspection when a test fails.
         s.n += 1;
-        const in_path = try std.fmt.allocPrint(a, "io/{d}.in", .{s.n});
-        const out_path = try std.fmt.allocPrint(a, "io/{d}.out", .{s.n});
-        const err_path = try std.fmt.allocPrint(a, "io/{d}.err", .{s.n});
+        const in_path = try a.print("io/{d}.in", .{s.n});
+        const out_path = try a.print("io/{d}.out", .{s.n});
+        const err_path = try a.print("io/{d}.err", .{s.n});
         _ = try s.write(in_path, stdin orelse "");
 
         const in_file = try std.Io.Dir.cwd().openFile(s.io, try s.path(in_path), .{});

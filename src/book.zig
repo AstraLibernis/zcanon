@@ -192,7 +192,7 @@ pub fn stamp(buf: *[20]u8, epoch_secs: i64) ![]const u8 {
     const md = yd.calculateMonthDay();
     const ds = es.getDaySeconds();
 
-    return try std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
+    return try std.mem.print(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
         yd.year,
         md.month.numeric(),
         @as(u32, md.day_index) + 1,

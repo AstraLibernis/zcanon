@@ -69,7 +69,7 @@ pub fn targetsPath(c: vars.Ctx) ![]const u8 {
 pub fn exeStamp(c: vars.Ctx) ![]const u8 {
     const self = try vars.selfExe(c);
     const st = try std.Io.Dir.cwd().statFile(c.io, self, .{});
-    return std.fmt.allocPrint(c.gpa, "{s}\t{d}", .{ self, st.mtime.nanoseconds });
+    return c.gpa.print("{s}\t{d}", .{ self, st.mtime.nanoseconds });
 }
 
 // ---- client ------------------------------------------------------------------
@@ -104,7 +104,7 @@ pub fn request(c: vars.Ctx, root: []const u8, cmd: Cmd, keys: ?*const zephem.Key
 
 fn requestInner(c: vars.Ctx, root: []const u8, cmd: Cmd, keys: ?*const zephem.Keys) !?Reply {
     const base = try basePath(c, root);
-    const sock = try std.fmt.allocPrint(c.gpa, "{s}.sock", .{base});
+    const sock = try c.gpa.print("{s}.sock", .{base});
     const addr = try std.Io.net.UnixAddress.init(sock);
     const stream = try addr.connect(c.io);
     defer stream.close(c.io);
@@ -221,7 +221,7 @@ const Daemon = struct {
         d.diag_text.clearRetainingCapacity();
         d.diags.clearRetainingCapacity();
         for (diags) |x| {
-            const text = std.fmt.allocPrint(d.c.gpa, "{s}{s}", .{ x.path, x.message }) catch continue;
+            const text = d.c.gpa.print("{s}{s}", .{ x.path, x.message }) catch continue;
             d.diag_text.append(d.c.gpa, text) catch {
                 d.c.gpa.free(text);
                 continue;
@@ -516,13 +516,13 @@ pub fn serve(parent: vars.Ctx, root: []const u8) !void {
 
     const base = try basePath(c, root);
     if (std.fs.path.dirname(base)) |dir| try std.Io.Dir.cwd().createDirPath(c.io, dir);
-    const lock_path = try std.fmt.allocPrint(c.gpa, "{s}.lock", .{base});
+    const lock_path = try c.gpa.print("{s}.lock", .{base});
     const lock_file = try std.Io.Dir.cwd().createFile(c.io, lock_path, .{ .truncate = false });
     defer lock_file.close(c.io);
     if (!try lock_file.tryLock(c.io, .exclusive)) return; // another daemon owns this root
 
     // We own the lock, so any socket file left behind is from a daemon that died.
-    const sock_path = try std.fmt.allocPrint(c.gpa, "{s}.sock", .{base});
+    const sock_path = try c.gpa.print("{s}.sock", .{base});
     std.Io.Dir.cwd().deleteFile(c.io, sock_path) catch {}; // zsnag:ok — absent is the normal case
     const addr = try std.Io.net.UnixAddress.init(sock_path);
     var server = try addr.listen(c.io, .{});
