@@ -84,6 +84,7 @@ ast-check	error	9	2026-09-28 18:16:30	2026-10-02 11:04:17	zcanon	local constant 
 ast-check	error	15	2026-09-28 17:26:55	2026-10-02 11:25:18	zcanon	use of undeclared identifier '…'
 compile	error	1	2026-09-28 16:56:41	2026-09-28 16:56:41	zcanon	local variable is never mutated
 R010	info	46	2026-10-07 12:26:5	2026-10-22 12:35:0	zephem	debug.print left in code? remove or use std.log.
+R011	warn	75	2026-10-22 14:30:50	2026-11-04 13:46:28	zephem	`std.fmt.allocPrint` is deprecated — the map says: use `Allocator.print`.
 R011	warn	11	2026-10-06 17:43:0	2026-10-17 04:30:3	zephem	`std.mem.indexOf` is deprecated — the map says: use `find`
 R011	warn	11	2026-10-06 17:43:05	2026-10-17 04:30:30	zephem	`std.mem.indexOf` is deprecated — the map says: use `find`.
 R011	warn	2	2026-09-28 18:53:2	2026-10-17 04:50:2	zephem	`std.mem.lastIndexOfScalar` is deprecated — the map says: use `findScalarLast`
@@ -253,6 +254,23 @@ compil	erro	1	2026-10-17 05:24:3	2026-10-17 05:24:3	zscour	binary operator '…'
 compil	erro	1	2026-10-06 18:11:5	2026-10-06 18:11:5	zscour	duplicate struct member name '…'
 compile	error	1	2026-10-17 05:24:38	2026-10-17 05:24:38	zscour	binary operator '…' has whitespace on one side, but not the other
 compile	error	1	2026-10-06 18:11:50	2026-10-06 18:11:50	zscour	duplicate struct member name '…'
+R005	warn	13	2026-09-28 17:23:0	2026-11-04 19:33:07	zspiral	empty catch {} silently swallows an error.
+R007	info	1240	2026-09-28 17:10:5	2026-11-04 20:58:30	zspiral	this cast can panic/corrupt if out of range; verify first.
+R010	info	129	2026-10-07 12:26:5	2026-11-04 19:47:00	zspiral	debug.print left in code? remove or use std.log.
+R013	info	1	2026-11-04 21:06:40	2026-11-04 21:06:40	zspiral	`std.crypto.random.intRangeLessThan` is not in the zephem map — cannot verify it exists (check with `zephem look`).
+ast-check	error	5	2026-10-22 18:27:08	2026-11-04 14:22:35	zspiral	binary operator '…' has whitespace on one side, but not the other
+ast-check	error	1	2026-11-04 17:52:56	2026-11-04 17:52:56	zspiral	capture '…' shadows local constant from outer scope
+ast-check	info	3	2026-10-29 16:39:54	2026-11-04 14:24:12	zspiral	consider using '…'
+ast-check	info	14	2026-10-26 15:57:13	2026-11-04 14:59:27	zspiral	declared here
+ast-check	error	1	2026-11-04 14:27:03	2026-11-04 14:27:03	zspiral	invalid digit '…' for hex base
+ast-check	error	8	2026-10-26 15:57:13	2026-11-04 14:59:27	zspiral	local constant shadows declaration of '…'
+ast-check	error	3	2026-10-29 16:39:54	2026-11-04 14:24:12	zspiral	local variable is never mutated
+ast-check	info	5	2026-10-23 11:17:49	2026-11-04 17:52:56	zspiral	previous declaration here
+ast-check	error	3	2026-10-23 11:27:32	2026-11-04 16:36:32	zspiral	redeclaration of local variable '…'
+ast-check	error	11	2026-10-26 17:04:50	2026-11-04 20:55:32	zspiral	unused function parameter
+ast-check	error	8	2026-10-23 14:26:53	2026-11-04 18:56:07	zspiral	unused local constant
+ast-check	error	7	2026-10-23 12:44:54	2026-11-04 16:34:22	zspiral	unused local variable
+ast-check	error	194	2026-10-22 19:01:43	2026-11-04 20:59:53	zspiral	use of undeclared identifier '…'
 R005	warn	6	2026-09-28 17:23:0	2026-10-15 17:17:58	zstrata	empty catch {} silently swallows an error.
 R007	info	564	2026-09-28 17:10:55	2026-10-17 05:25:17	zstrata	this cast can panic/corrupt if out of range; verify first.
 R009	info	12	2026-10-02 12:34:24	2026-10-15 17:22:13	zstrata	page_allocator as a general allocator is slow; pass an allocator in.
