@@ -12,6 +12,7 @@ ast-check	error	5	2026-10-23 12:44:54	2026-11-03 16:10:54	-	unused local variabl
 compil	erro	2	2026-09-30 20:02:0	2026-10-05 13:56:5	-	'…' is not marked '…
 compil	erro	13	2026-09-30 15:45:2	2026-10-05 13:56:5	-	unable to load '…': FileNotFound
 compile	error	2	2026-09-30 20:02:03	2026-10-05 13:56:56	-	'…' is not marked '…'
+compile	error	1	2026-11-05 19:49:22	2026-11-05 19:49:22	-	Cannot approximately compare two comptime_float values
 compile	error	13	2026-09-30 15:45:23	2026-10-05 13:56:56	-	unable to load '…': FileNotFound
 R007	info	492	2026-09-28 17:10:55	2026-10-15 12:02:29	kaggle	this cast can panic/corrupt if out of range; verify first.
 R011	warn	4	2026-10-06 17:43:05	2026-10-06 17:43:05	kaggle	`std.StringArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.String`.
@@ -186,15 +187,17 @@ compile	error	10	2026-10-17 05:25:17	2026-10-17 05:25:40	zneuro	no field named '
 compile	error	5	2026-09-28 18:18:15	2026-10-17 05:25:40	zneuro	no field named '…' in struct '…'
 R004	warn	14	2026-09-28 18:32:0	2026-11-03 16:54:11	zpack	catch unreachable crashes in release if it ever fails; handle the error.
 R005	warn	11	2026-09-28 17:23:0	2026-11-03 19:29:26	zpack	empty catch {} silently swallows an error.
-R007	info	1137	2026-09-28 17:10:5	2026-11-03 21:11:35	zpack	this cast can panic/corrupt if out of range; verify first.
+R007	info	1364	2026-09-28 17:10:5	2026-11-05 21:27:55	zpack	this cast can panic/corrupt if out of range; verify first.
 R008	warn	1	2026-10-30 12:06:55	2026-10-30 12:06:55	zpack	acquired but never released (no matching deinit/close); add a defer. (heuristic)
 R009	info	20	2026-10-02 12:34:2	2026-10-23 12:38:44	zpack	page_allocator as a general allocator is slow; pass an allocator in.
-R010	info	123	2026-10-07 12:26:5	2026-10-30 12:27:32	zpack	debug.print left in code? remove or use std.log.
+R010	info	155	2026-10-07 12:26:5	2026-11-05 19:16:05	zpack	debug.print left in code? remove or use std.log.
 R011	warn	1	2026-10-29 13:12:37	2026-10-29 13:12:37	zpack	`std.AutoArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.Auto`.
-R011	warn	66	2026-10-22 14:30:50	2026-11-03 18:23:47	zpack	`std.fmt.allocPrint` is deprecated — the map says: use `Allocator.print`.
-R011	warn	12	2026-10-22 14:29:55	2026-11-03 19:27:20	zpack	`std.fmt.bufPrint` is deprecated — the map says: use `mem.print`.
+R011	warn	7	2026-10-06 17:43:0	2026-11-05 16:29:51	zpack	`std.StringArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.String`.
+R011	warn	90	2026-10-22 14:30:50	2026-11-05 18:07:12	zpack	`std.fmt.allocPrint` is deprecated — the map says: use `Allocator.print`.
+R011	warn	14	2026-10-22 14:29:55	2026-11-05 16:29:51	zpack	`std.fmt.bufPrint` is deprecated — the map says: use `mem.print`.
 R011	warn	4	2026-09-28 19:26:2	2026-11-03 19:27:20	zpack	`std.fs.max_path_bytes` is deprecated — the map says: use `std.Io.Dir.max_path_bytes`.
-R011	warn	1	2026-11-03 19:27:20	2026-11-03 19:27:20	zpack	`std.mem.indexOf` is deprecated — the map says: use `find`.
+R011	warn	1	2026-11-05 20:46:00	2026-11-05 20:46:00	zpack	`std.mem.indexOfScalar` is deprecated — the map says: use `findScalar`.
+R011	warn	2	2026-11-03 19:27:20	2026-11-05 16:29:51	zpack	`std.mem.indexOf` is deprecated — the map says: use `find`.
 R011	warn	2	2026-10-21 17:38:1	2026-10-22 18:45:20	zpack	`std.testing.TmpDir.parent_dir_path` is deprecated — the map says: Deprecated.
 R013	info	1	2026-10-27 13:02:50	2026-10-27 13:02:50	zpack	`std.Thread.Mutex` is not in the zephem map — cannot verify it exists (check with `zephem look`).
 R013	info	1	2026-11-03 15:35:53	2026-11-03 15:35:53	zpack	`std.meta.Int` is not in the zephem map — cannot verify it exists (check with `zephem look`).
@@ -202,30 +205,35 @@ R013	info	1	2026-10-23 13:52:32	2026-10-23 13:52:32	zpack	`std.process.hasEnvVar
 R013	info	1	2026-10-22 18:58:06	2026-10-22 18:58:06	zpack	`std.time.Timer.start` is not in the zephem map — cannot verify it exists (check with `zephem look`).
 R015	info	2	2026-10-23 14:22:01	2026-10-29 16:01:57	zpack	large `= undefined` array on the stack (>= 64 KiB): Debug and ReleaseSafe write 0xAA over all of it on every call, and the frame costs a stack probe in every mode. Harmless in a function called once; in one called per row, node or round, size it to need or allocate it once outside the loop.
 ast-check	error	3	2026-10-22 18:27:08	2026-10-29 14:02:32	zpack	binary operator '…' has whitespace on one side, but not the other
+ast-check	error	1	2026-11-05 18:42:09	2026-11-05 18:42:09	zpack	capture '…' shadows local variable from outer scope
 ast-check	info	2	2026-10-29 16:39:54	2026-11-03 00:24:24	zpack	consider using '…'
-ast-check	info	13	2026-10-26 15:57:13	2026-11-03 15:03:05	zpack	declared here
+ast-check	error	1	2026-11-05 19:32:34	2026-11-05 19:32:34	zpack	declaration '…' shadows local constant from outer scope
+ast-check	info	16	2026-10-26 15:57:13	2026-11-05 19:29:30	zpack	declared here
 ast-check	info	3	2026-10-22 19:01:28	2026-11-03 18:23:51	zpack	duplicate name here
 ast-check	error	3	2026-10-22 19:01:28	2026-11-03 18:23:51	zpack	duplicate struct member name '…'
 ast-check	error	1	2026-10-23 12:17:49	2026-10-23 12:17:49	zpack	expected '…' after declaration
 ast-check	error	1	2026-10-26 12:44:52	2026-10-26 12:44:52	zpack	expected '…' after field
 ast-check	error	1	2026-10-23 12:00:58	2026-10-23 12:00:58	zpack	expected '…' after initializer
 ast-check	error	1	2026-10-22 19:55:12	2026-10-22 19:55:12	zpack	expected '…' after statement
-ast-check	error	2	2026-10-29 15:03:17	2026-10-29 17:34:31	zpack	expected '…' or '…' after statement
+ast-check	error	4	2026-10-29 15:03:17	2026-11-05 18:29:43	zpack	expected '…' or '…' after statement
+ast-check	error	1	2026-11-05 17:11:07	2026-11-05 17:11:07	zpack	expected expression, found '…'
 ast-check	error	5	2026-10-26 12:47:18	2026-11-03 00:24:07	zpack	expected statement, found '…'
 ast-check	error	2	2026-10-26 16:40:25	2026-11-03 00:24:05	zpack	expected type expression, found '…'
 ast-check	error	2	2026-10-26 19:29:27	2026-11-03 15:03:05	zpack	function parameter shadows declaration of '…'
 ast-check	error	1	2026-10-23 11:17:49	2026-10-23 11:17:49	zpack	local constant '…' shadows function parameter from outer scope
-ast-check	error	7	2026-10-26 15:57:13	2026-10-30 14:39:59	zpack	local constant shadows declaration of '…'
+ast-check	error	3	2026-11-05 12:58:26	2026-11-05 17:10:42	zpack	local constant '…' shadows local constant from outer scope
+ast-check	error	9	2026-10-26 15:57:13	2026-11-05 19:29:30	zpack	local constant shadows declaration of '…'
 ast-check	error	2	2026-10-29 16:39:54	2026-11-03 00:24:24	zpack	local variable is never mutated
 ast-check	error	6	2026-10-28 18:03:23	2026-11-03 00:24:10	zpack	local variable shadows declaration of '…'
-ast-check	info	3	2026-10-23 11:17:49	2026-10-29 14:31:36	zpack	previous declaration here
+ast-check	info	12	2026-10-23 11:17:49	2026-11-05 19:35:44	zpack	previous declaration here
+ast-check	error	1	2026-11-05 19:35:44	2026-11-05 19:35:44	zpack	redeclaration of local constant '…'
 ast-check	error	2	2026-10-23 11:27:32	2026-10-29 14:31:36	zpack	redeclaration of local variable '…'
 ast-check	info	2	2026-10-22 19:01:28	2026-11-03 18:23:47	zpack	struct declared here
 ast-check	error	1	2026-10-29 15:03:27	2026-10-29 15:03:27	zpack	unused capture
-ast-check	error	8	2026-10-26 17:04:50	2026-10-29 19:05:21	zpack	unused function parameter
-ast-check	error	5	2026-10-23 14:26:53	2026-10-29 17:35:48	zpack	unused local constant
-ast-check	error	3	2026-10-23 12:44:54	2026-10-29 15:54:28	zpack	unused local variable
-ast-check	error	135	2026-10-22 19:01:43	2026-11-03 19:46:30	zpack	use of undeclared identifier '…'
+ast-check	error	12	2026-10-26 17:04:50	2026-11-05 19:56:34	zpack	unused function parameter
+ast-check	error	13	2026-10-23 14:26:53	2026-11-05 19:32:40	zpack	unused local constant
+ast-check	error	15	2026-10-23 12:44:54	2026-11-05 19:14:53	zpack	unused local variable
+ast-check	error	251	2026-10-22 19:01:43	2026-11-05 20:46:00	zpack	use of undeclared identifier '…'
 compile	error	5	2026-10-23 14:25:21	2026-10-29 19:02:41	zpack	ambiguous coercion of division operands '…' and '…'; non-zero remainder '…'
 compile	error	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	duplicate struct member name '…'
 compile	error	1	2026-10-23 12:17:49	2026-10-23 12:17:49	zpack	expected '…' after declaration
@@ -254,23 +262,30 @@ compil	erro	1	2026-10-17 05:24:3	2026-10-17 05:24:3	zscour	binary operator '…'
 compil	erro	1	2026-10-06 18:11:5	2026-10-06 18:11:5	zscour	duplicate struct member name '…'
 compile	error	1	2026-10-17 05:24:38	2026-10-17 05:24:38	zscour	binary operator '…' has whitespace on one side, but not the other
 compile	error	1	2026-10-06 18:11:50	2026-10-06 18:11:50	zscour	duplicate struct member name '…'
+R004	warn	15	2026-09-28 18:32:0	2026-11-05 12:23:57	zspiral	catch unreachable crashes in release if it ever fails; handle the error.
 R005	warn	13	2026-09-28 17:23:0	2026-11-04 19:33:07	zspiral	empty catch {} silently swallows an error.
 R007	info	1240	2026-09-28 17:10:5	2026-11-04 20:58:30	zspiral	this cast can panic/corrupt if out of range; verify first.
+R009	info	21	2026-10-02 12:34:2	2026-11-05 15:30:55	zspiral	page_allocator as a general allocator is slow; pass an allocator in.
 R010	info	129	2026-10-07 12:26:5	2026-11-04 19:47:00	zspiral	debug.print left in code? remove or use std.log.
+R011	warn	2	2026-10-29 13:12:37	2026-11-05 14:11:43	zspiral	`std.AutoArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.Auto`.
 R013	info	1	2026-11-04 21:06:40	2026-11-04 21:06:40	zspiral	`std.crypto.random.intRangeLessThan` is not in the zephem map — cannot verify it exists (check with `zephem look`).
-ast-check	error	5	2026-10-22 18:27:08	2026-11-04 14:22:35	zspiral	binary operator '…' has whitespace on one side, but not the other
+ast-check	error	7	2026-10-22 18:27:08	2026-11-05 15:28:49	zspiral	binary operator '…' has whitespace on one side, but not the other
 ast-check	error	1	2026-11-04 17:52:56	2026-11-04 17:52:56	zspiral	capture '…' shadows local constant from outer scope
-ast-check	info	3	2026-10-29 16:39:54	2026-11-04 14:24:12	zspiral	consider using '…'
+ast-check	info	6	2026-10-29 16:39:54	2026-11-05 15:32:56	zspiral	consider using '…'
 ast-check	info	14	2026-10-26 15:57:13	2026-11-04 14:59:27	zspiral	declared here
+ast-check	error	1	2026-11-05 12:23:57	2026-11-05 12:23:57	zspiral	expected '…', found '…'
 ast-check	error	1	2026-11-04 14:27:03	2026-11-04 14:27:03	zspiral	invalid digit '…' for hex base
 ast-check	error	8	2026-10-26 15:57:13	2026-11-04 14:59:27	zspiral	local constant shadows declaration of '…'
-ast-check	error	3	2026-10-29 16:39:54	2026-11-04 14:24:12	zspiral	local variable is never mutated
+ast-check	error	1	2026-11-05 12:24:08	2026-11-05 12:24:08	zspiral	local variable '…' shadows function parameter from outer scope
+ast-check	error	6	2026-10-29 16:39:54	2026-11-05 15:32:56	zspiral	local variable is never mutated
+ast-check	error	8	2026-10-28 18:03:23	2026-11-05 15:26:18	zspiral	local variable shadows declaration of '…'
 ast-check	info	5	2026-10-23 11:17:49	2026-11-04 17:52:56	zspiral	previous declaration here
 ast-check	error	3	2026-10-23 11:27:32	2026-11-04 16:36:32	zspiral	redeclaration of local variable '…'
 ast-check	error	11	2026-10-26 17:04:50	2026-11-04 20:55:32	zspiral	unused function parameter
 ast-check	error	8	2026-10-23 14:26:53	2026-11-04 18:56:07	zspiral	unused local constant
 ast-check	error	7	2026-10-23 12:44:54	2026-11-04 16:34:22	zspiral	unused local variable
 ast-check	error	194	2026-10-22 19:01:43	2026-11-04 20:59:53	zspiral	use of undeclared identifier '…'
+compile	error	1	2026-11-05 15:58:34	2026-11-05 15:58:34	zspiral	no field or member function named '…' in '…'
 R005	warn	6	2026-09-28 17:23:0	2026-10-15 17:17:58	zstrata	empty catch {} silently swallows an error.
 R007	info	564	2026-09-28 17:10:55	2026-10-17 05:25:17	zstrata	this cast can panic/corrupt if out of range; verify first.
 R009	info	12	2026-10-02 12:34:24	2026-10-15 17:22:13	zstrata	page_allocator as a general allocator is slow; pass an allocator in.
