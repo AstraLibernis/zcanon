@@ -467,8 +467,15 @@ pub fn refreshSkillList(c: vars.Ctx, entries: []const book.Entry) void {
 
 /// A path the model can paste into a shell: quoted only when it has to be.
 fn shellWord(gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
-    if (std.mem.findScalar(u8, path, ' ') == null) return path;
-    return gpa.print("\"{s}\"", .{path});
+    // Windows: the model runs these through Git Bash, where an unquoted `\` is an escape and
+    // vanishes; forward slashes work there and in cmd/PowerShell (as in `settings.command`).
+    const p = if (builtin.os.tag == .windows and std.mem.findScalar(u8, path, '\\') != null) blk: {
+        const s = try gpa.dupe(u8, path);
+        std.mem.replaceScalar(u8, s, '\\', '/');
+        break :blk s;
+    } else path;
+    if (std.mem.findScalar(u8, p, ' ') == null) return p;
+    return gpa.print("\"{s}\"", .{p});
 }
 
 // ---- helpers --------------------------------------------------------------

@@ -461,7 +461,9 @@ test "cli: setup installs the hook, records zephem, and proves the hook fires" {
     // The installed skill carries real paths, not the repo's placeholders.
     const skill_text = try s.read("skills/zcanon/SKILL.md");
     try testing.expect(std.mem.find(u8, skill_text, "{{") == null);
-    try testing.expect(std.mem.find(u8, skill_text, "zig-out/bin/zcanon setup") != null);
+    // Forward slashes on every OS (the model runs it through a shell; Windows means Git Bash).
+    const exe_setup = if (@import("builtin").os.tag == .windows) "zig-out/bin/zcanon.exe setup" else "zig-out/bin/zcanon setup";
+    try testing.expect(std.mem.find(u8, skill_text, exe_setup) != null);
     // The live test's probe and its book leave nothing behind.
     try testing.expect(!s.exists("config/probe"));
     try testing.expect(!s.exists("config/book.tsv"));
@@ -611,7 +613,13 @@ test "cli: add-check restores build.zig when the result does not build" {
     try testing.expectEqualStrings(own, try s.read("proj/build.zig"));
 }
 
+/// The daemon is switched off on Windows (`daemon.enabled`): its tests skip there.
+fn skipWithoutDaemon() !void {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+}
+
 test "cli: the daemon reports a type error ast-check cannot see, in a project with no check step" {
+    try skipWithoutDaemon();
     var s = try box("daemon");
     defer s.deinit();
     // No `check` step and no add-check: the daemon checks through its own build file, and the
@@ -723,6 +731,7 @@ test "cli: zsnag rejects unknown flags instead of reading them as files" {
 // project against its old build graph after build.zig changed (a module added to
 // build.zig was still "no module named …"). It must restart the watcher on its own.
 test "cli: the daemon picks up a changed build.zig without being restarted" {
+    try skipWithoutDaemon();
     var s = try box("daemon-buildzig");
     defer s.deinit();
     const main = try s.write("proj/main.zig", "const opts = @import(\"opts\");\npub fn main() void {\n    _ = opts.x;\n}\n");
@@ -765,6 +774,7 @@ test "cli: the daemon picks up a changed build.zig without being restarted" {
 // B34, second half: while a project did not build, the daemon waited for build.zig only,
 // so fixing a broken build.zig.zon was never noticed.
 test "cli: the daemon recovers when only build.zig.zon is fixed" {
+    try skipWithoutDaemon();
     var s = try box("daemon-zon");
     defer s.deinit();
     const main = try s.write("proj/main.zig", "pub fn main() void {}\n");
@@ -820,7 +830,10 @@ fn bashHome(s: *h.Sandbox) ![2][2][]const u8 {
 fn touchAfterStamp(s: *h.Sandbox, rel: []const u8, secs: usize) !void {
     const stamp = try std.Io.Dir.cwd().statFile(s.io, try s.path("stamp"), .{});
     const t = stamp.mtime.nanoseconds + @as(i96, @intCast(secs)) * std.time.ns_per_s;
-    try std.Io.Dir.cwd().setTimestamps(s.io, try s.path(rel), .{ .modify_timestamp = .{ .new = .fromNanoseconds(t) } });
+    // Through a file handle: `Dir.setTimestamps` is an unimplemented panic on Windows in Zig 0.17.
+    const f = try std.Io.Dir.cwd().openFile(s.io, try s.path(rel), .{ .mode = .read_write });
+    defer f.close(s.io);
+    try f.setTimestamps(s.io, .{ .modify_timestamp = .{ .new = .fromNanoseconds(t) } });
 }
 
 test "cli: a Bash run finds edits anywhere under home, ignoring cd and ~" {

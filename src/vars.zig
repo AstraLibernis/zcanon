@@ -19,6 +19,11 @@ pub const Ctx = struct {
     }
 };
 
+/// `std.process.spawn` `.pgid` for a background child that must outlive the hook which started
+/// it: its own process group on POSIX (`0`). Windows has no process groups (there `pgid` is a
+/// handle type) and a child already outlives its parent, so it keeps the default.
+pub const own_process_group: ?std.posix.pid_t = if (builtin.os.tag == .windows) null else 0;
+
 pub const Error = error{HomeNotSet} || std.mem.Allocator.Error;
 
 pub fn home(c: Ctx) Error![]const u8 {

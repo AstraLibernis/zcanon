@@ -290,7 +290,7 @@ pub fn maybeStart(c: vars.Ctx) void {
         .stdout = .ignore,
         .stderr = .ignore,
         // Its own process group: it must outlive the hook that started it.
-        .pgid = 0,
+        .pgid = vars.own_process_group,
     }) catch return;
 }
 

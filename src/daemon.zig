@@ -172,7 +172,7 @@ pub fn start(c: vars.Ctx, root: []const u8) void {
         .stdout = .ignore,
         .stderr = .ignore,
         // Its own process group: it must outlive the hook that started it.
-        .pgid = 0,
+        .pgid = vars.own_process_group,
     }) catch return;
 }
 
@@ -427,7 +427,7 @@ const Daemon = struct {
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .pipe,
-            .pgid = 0,
+            .pgid = vars.own_process_group, // so `killWatcher` can signal the whole group
         });
         d.watcher_pid = child.id;
         defer {
@@ -466,6 +466,9 @@ const Daemon = struct {
     fn killWatcher(d: *Daemon) void {
         const pid = d.watcher_pid orelse return;
         d.watcher_pid = null;
+        // No process groups on Windows; unreachable there today (`enabled` is false on Windows).
+        // Porting the daemon means a job object here.
+        if (builtin.os.tag == .windows) return;
         std.posix.kill(-pid, .TERM) catch {}; // zsnag:ok — already gone is fine
         reapOrphans(d.c.io);
     }
