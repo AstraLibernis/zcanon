@@ -187,10 +187,10 @@ compile	error	10	2026-10-17 05:25:17	2026-10-17 05:25:40	zneuro	no field named '
 compile	error	5	2026-09-28 18:18:15	2026-10-17 05:25:40	zneuro	no field named '…' in struct '…'
 R004	warn	14	2026-09-28 18:32:0	2026-11-03 16:54:11	zpack	catch unreachable crashes in release if it ever fails; handle the error.
 R005	warn	11	2026-09-28 17:23:0	2026-11-03 19:29:26	zpack	empty catch {} silently swallows an error.
-R007	info	1364	2026-09-28 17:10:5	2026-11-05 21:27:55	zpack	this cast can panic/corrupt if out of range; verify first.
+R007	info	1436	2026-09-28 17:10:5	2026-11-06 15:21:10	zpack	this cast can panic/corrupt if out of range; verify first.
 R008	warn	1	2026-10-30 12:06:55	2026-10-30 12:06:55	zpack	acquired but never released (no matching deinit/close); add a defer. (heuristic)
-R009	info	20	2026-10-02 12:34:2	2026-10-23 12:38:44	zpack	page_allocator as a general allocator is slow; pass an allocator in.
-R010	info	155	2026-10-07 12:26:5	2026-11-05 19:16:05	zpack	debug.print left in code? remove or use std.log.
+R009	info	22	2026-10-02 12:34:2	2026-11-06 13:01:35	zpack	page_allocator as a general allocator is slow; pass an allocator in.
+R010	info	164	2026-10-07 12:26:5	2026-11-06 13:24:02	zpack	debug.print left in code? remove or use std.log.
 R011	warn	1	2026-10-29 13:12:37	2026-10-29 13:12:37	zpack	`std.AutoArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.Auto`.
 R011	warn	7	2026-10-06 17:43:0	2026-11-05 16:29:51	zpack	`std.StringArrayHashMapUnmanaged` is deprecated — the map says: use `array_hash_map.String`.
 R011	warn	90	2026-10-22 14:30:50	2026-11-05 18:07:12	zpack	`std.fmt.allocPrint` is deprecated — the map says: use `Allocator.print`.
@@ -206,11 +206,11 @@ R013	info	1	2026-10-22 18:58:06	2026-10-22 18:58:06	zpack	`std.time.Timer.start`
 R015	info	2	2026-10-23 14:22:01	2026-10-29 16:01:57	zpack	large `= undefined` array on the stack (>= 64 KiB): Debug and ReleaseSafe write 0xAA over all of it on every call, and the frame costs a stack probe in every mode. Harmless in a function called once; in one called per row, node or round, size it to need or allocate it once outside the loop.
 ast-check	error	3	2026-10-22 18:27:08	2026-10-29 14:02:32	zpack	binary operator '…' has whitespace on one side, but not the other
 ast-check	error	1	2026-11-05 18:42:09	2026-11-05 18:42:09	zpack	capture '…' shadows local variable from outer scope
-ast-check	info	2	2026-10-29 16:39:54	2026-11-03 00:24:24	zpack	consider using '…'
+ast-check	info	7	2026-10-29 16:39:54	2026-11-06 13:11:03	zpack	consider using '…'
 ast-check	error	1	2026-11-05 19:32:34	2026-11-05 19:32:34	zpack	declaration '…' shadows local constant from outer scope
-ast-check	info	16	2026-10-26 15:57:13	2026-11-05 19:29:30	zpack	declared here
-ast-check	info	3	2026-10-22 19:01:28	2026-11-03 18:23:51	zpack	duplicate name here
-ast-check	error	3	2026-10-22 19:01:28	2026-11-03 18:23:51	zpack	duplicate struct member name '…'
+ast-check	info	19	2026-10-26 15:57:13	2026-11-06 15:17:36	zpack	declared here
+ast-check	info	4	2026-10-22 19:01:28	2026-11-06 14:40:19	zpack	duplicate name here
+ast-check	error	4	2026-10-22 19:01:28	2026-11-06 14:40:19	zpack	duplicate struct member name '…'
 ast-check	error	1	2026-10-23 12:17:49	2026-10-23 12:17:49	zpack	expected '…' after declaration
 ast-check	error	1	2026-10-26 12:44:52	2026-10-26 12:44:52	zpack	expected '…' after field
 ast-check	error	1	2026-10-23 12:00:58	2026-10-23 12:00:58	zpack	expected '…' after initializer
@@ -222,18 +222,18 @@ ast-check	error	2	2026-10-26 16:40:25	2026-11-03 00:24:05	zpack	expected type ex
 ast-check	error	2	2026-10-26 19:29:27	2026-11-03 15:03:05	zpack	function parameter shadows declaration of '…'
 ast-check	error	1	2026-10-23 11:17:49	2026-10-23 11:17:49	zpack	local constant '…' shadows function parameter from outer scope
 ast-check	error	3	2026-11-05 12:58:26	2026-11-05 17:10:42	zpack	local constant '…' shadows local constant from outer scope
-ast-check	error	9	2026-10-26 15:57:13	2026-11-05 19:29:30	zpack	local constant shadows declaration of '…'
-ast-check	error	2	2026-10-29 16:39:54	2026-11-03 00:24:24	zpack	local variable is never mutated
-ast-check	error	6	2026-10-28 18:03:23	2026-11-03 00:24:10	zpack	local variable shadows declaration of '…'
+ast-check	error	11	2026-10-26 15:57:13	2026-11-06 15:17:36	zpack	local constant shadows declaration of '…'
+ast-check	error	7	2026-10-29 16:39:54	2026-11-06 13:11:03	zpack	local variable is never mutated
+ast-check	error	9	2026-10-28 18:03:23	2026-11-06 13:02:00	zpack	local variable shadows declaration of '…'
 ast-check	info	12	2026-10-23 11:17:49	2026-11-05 19:35:44	zpack	previous declaration here
 ast-check	error	1	2026-11-05 19:35:44	2026-11-05 19:35:44	zpack	redeclaration of local constant '…'
 ast-check	error	2	2026-10-23 11:27:32	2026-10-29 14:31:36	zpack	redeclaration of local variable '…'
-ast-check	info	2	2026-10-22 19:01:28	2026-11-03 18:23:47	zpack	struct declared here
+ast-check	info	3	2026-10-22 19:01:28	2026-11-06 14:40:19	zpack	struct declared here
 ast-check	error	1	2026-10-29 15:03:27	2026-10-29 15:03:27	zpack	unused capture
-ast-check	error	12	2026-10-26 17:04:50	2026-11-05 19:56:34	zpack	unused function parameter
-ast-check	error	13	2026-10-23 14:26:53	2026-11-05 19:32:40	zpack	unused local constant
+ast-check	error	14	2026-10-26 17:04:50	2026-11-06 14:41:58	zpack	unused function parameter
+ast-check	error	16	2026-10-23 14:26:53	2026-11-06 15:19:08	zpack	unused local constant
 ast-check	error	15	2026-10-23 12:44:54	2026-11-05 19:14:53	zpack	unused local variable
-ast-check	error	251	2026-10-22 19:01:43	2026-11-05 20:46:00	zpack	use of undeclared identifier '…'
+ast-check	error	266	2026-10-22 19:01:43	2026-11-06 15:35:48	zpack	use of undeclared identifier '…'
 compile	error	5	2026-10-23 14:25:21	2026-10-29 19:02:41	zpack	ambiguous coercion of division operands '…' and '…'; non-zero remainder '…'
 compile	error	1	2026-10-22 19:01:28	2026-10-22 19:01:28	zpack	duplicate struct member name '…'
 compile	error	1	2026-10-23 12:17:49	2026-10-23 12:17:49	zpack	expected '…' after declaration
