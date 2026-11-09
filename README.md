@@ -183,7 +183,7 @@ gone:
 |---|---|---|
 | `~/.claude/settings.json` | zcanon's hook entry only; your other settings and hooks are untouched | `uninstall` |
 | `~/.claude/skills/zcanon/` | the skill, and `SKILL.md.bak` if setup made one (only if they are zcanon skills) | `uninstall` |
-| `~/.config/zcanon/` | the book of findings and the recorded zephem location | `uninstall --purge` |
+| `~/.config/zcanon/` | the book of findings, the recorded zephem location, and two caches the hook rebuilds by itself: `lookup.idx` (where each row of zephem's lookup table is, so a hook reads only the rows a file needs; tied to that exact table) and `zig-version` (the output of `zig version`, tied to the exact `zig` binary on PATH) | `uninstall --purge` |
 
 It leaves `settings.json.bak` (a copy of your own settings) and never touches zephem, which is
 its own project. Then delete the zcanon folder, and restart any open Claude Code session.

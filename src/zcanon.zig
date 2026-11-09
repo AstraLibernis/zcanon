@@ -19,6 +19,7 @@ const zephem = @import("zephem.zig");
 const daemon = @import("daemon.zig");
 const semantic = @import("semantic.zig");
 const bugs = @import("bugs.zig");
+const zigver = @import("zigver.zig");
 
 const usage =
     \\zcanon <command> [args]
@@ -404,9 +405,21 @@ const Run = struct {
                 try r.sem.append(c.gpa, .{ .root = root, .reply = reply, .newest_edit = edit });
             }
         }
-        var version: Pending = if (from_daemon == null) Pending.start(c, &.{ "zig", "version" }) else .{ .child = null };
+        // `zig version` is cached by the binary's identity (zigver.zig); spawn only on a miss,
+        // and then the exact binary the key names, so the stored answer is that binary's.
+        const exe: ?zigver.Exe = if (from_daemon == null) zigver.resolve(c) else null;
+        const hit: ?[]const u8 = if (exe) |e| zigver.cached(c, e) else null;
+        var version: Pending = if (from_daemon != null or hit != null)
+            .{ .child = null }
+        else
+            Pending.start(c, &.{ if (exe) |e| e.path else "zig", "version" });
         const loaded: zephem.LoadError!zephem.Map = from_daemon orelse zephem.load(c, &keys);
-        if (version.finish(c)) |v| r.zver = std.mem.trim(u8, v, " \t\r\n");
+        if (hit) |v| {
+            r.zver = v;
+        } else if (version.finish(c)) |v| {
+            r.zver = std.mem.trim(u8, v, " \t\r\n");
+            if (exe) |e| zigver.store(c, e, r.zver);
+        }
         // The syntax check runs on the std this binary was built with.
         if (!std.mem.eql(u8, r.zver, "unknown") and !std.mem.eql(u8, r.zver, builtin.zig_version_string))
             try r.notices.append(c.gpa, try c.gpa.print(

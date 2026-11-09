@@ -17,6 +17,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vars = @import("vars.zig");
+const mapindex = @import("mapindex.zig");
 
 /// Column indices in `lookup.tsv`. Documented contract, mirrored from zephem's src/lookup.zig.
 const Col = struct {
@@ -201,18 +202,26 @@ pub fn load(c: vars.Ctx, wanted: ?*const Keys) LoadError!Map {
         else => |x| return x,
     };
     errdefer file.close(c.io);
-    const size = (try file.stat(c.io)).size;
-    if (size == 0) {
+    const st = try file.stat(c.io);
+    if (st.size == 0) {
         file.close(c.io);
         return parse(c.gpa, &.{}, wanted);
     }
     var mm = try std.Io.File.MemoryMap.create(c.io, file, .{
-        .len = std.math.cast(usize, size) orelse return error.OutOfMemory,
+        .len = std.math.cast(usize, st.size) orelse return error.OutOfMemory,
         .protection = .{ .read = true, .write = false },
     });
     errdefer mm.destroy(c.io);
 
-    var m = try index(c.gpa, mm.memory, wanted);
+    // A few dozen wanted rows: look them up through the saved index (mapindex.zig) rather
+    // than scanning the whole table. No usable index → scan, then save one for next time.
+    var m = if (wanted) |w| blk: {
+        const key = mapindex.Key.of(path, st.mtime.nanoseconds, mm.memory);
+        if (loadIndexed(c, key, mm.memory, w)) |hit| break :blk hit;
+        const scanned = try index(c.gpa, mm.memory, wanted);
+        saveIndex(c, key, mm.memory);
+        break :blk scanned;
+    } else try index(c.gpa, mm.memory, null);
     m.mapped = .{ .io = c.io, .file = file, .mm = mm };
     return m;
 }
@@ -231,39 +240,96 @@ fn index(gpa: std.mem.Allocator, text: []const u8, wanted: ?*const Keys) !Map {
     var idx: std.StringHashMapUnmanaged(Entry) = .empty;
     errdefer idx.deinit(gpa);
 
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    var first = true;
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        if (first) {
-            first = false;
-            if (std.mem.startsWith(u8, line, "path\t")) continue;
-        }
+    var rows = mapindex.Rows.init(text);
+    while (rows.next()) |line| {
         // Filter on the path column before splitting the rest of the row.
         if (wanted) |w| {
             const tab = std.mem.findScalar(u8, line, '\t') orelse continue;
             if (!w.contains(line[0..tab])) continue;
         }
-        var f: [Col.count][]const u8 = @splat("");
-        var it = std.mem.splitScalar(u8, line, '\t');
-        var n: usize = 0;
-        while (it.next()) |field| : (n += 1) {
-            if (n >= Col.count) break;
-            f[n] = field;
-        }
-        if (n < Col.count) continue;
-        try idx.put(gpa, f[Col.path], .{
-            .row = line,
-            .path = f[Col.path],
-            .kind = f[Col.kind],
-            .sig = f[Col.sig],
-            .doc = f[Col.doc],
-            .rdetail = f[Col.rdetail],
-            .canon = f[Col.canon],
-            .vis = f[Col.vis],
-        });
+        try addRow(gpa, &idx, line);
     }
     return .{ .gpa = gpa, .text = &.{}, .index = idx };
+}
+
+/// Split one row and index it under its path; a later row with the same path replaces an
+/// earlier one. Rows with fewer than `Col.count` fields are skipped.
+fn addRow(gpa: std.mem.Allocator, idx: *std.StringHashMapUnmanaged(Entry), line: []const u8) !void {
+    var f: [Col.count][]const u8 = @splat("");
+    var it = std.mem.splitScalar(u8, line, '\t');
+    var n: usize = 0;
+    while (it.next()) |field| : (n += 1) {
+        if (n >= Col.count) break;
+        f[n] = field;
+    }
+    if (n < Col.count) return;
+    try idx.put(gpa, f[Col.path], .{
+        .row = line,
+        .path = f[Col.path],
+        .kind = f[Col.kind],
+        .sig = f[Col.sig],
+        .doc = f[Col.doc],
+        .rdetail = f[Col.rdetail],
+        .canon = f[Col.canon],
+        .vis = f[Col.vis],
+    });
+}
+
+/// Index only `wanted`'s rows of `text`, found through a prebuilt `mapindex`. Same result as
+/// `index(gpa, text, wanted)` for an index built from `text`.
+pub fn indexVia(gpa: std.mem.Allocator, ix: mapindex.Index, text: []const u8, wanted: *const Keys, comptime h: mapindex.HashFn) !Map {
+    var idx: std.StringHashMapUnmanaged(Entry) = .empty;
+    errdefer idx.deinit(gpa);
+    var it = wanted.keyIterator();
+    while (it.next()) |k| {
+        var rows = ix.find(text, k.*, h);
+        while (rows.next()) |line| try addRow(gpa, &idx, line);
+    }
+    return .{ .gpa = gpa, .text = &.{}, .index = idx };
+}
+
+/// Where zcanon keeps its index of the lookup table.
+pub fn indexPath(c: vars.Ctx) ![]u8 {
+    const dir = try vars.configDir(c);
+    defer c.gpa.free(dir);
+    return std.fs.path.join(c.gpa, &.{ dir, "lookup.idx" });
+}
+
+/// The map through the saved index, or null when there is no usable index for this table.
+fn loadIndexed(c: vars.Ctx, key: mapindex.Key, text: []const u8, wanted: *const Keys) ?Map {
+    const path = indexPath(c) catch return null;
+    defer c.gpa.free(path);
+    const file = std.Io.Dir.cwd().openFile(c.io, path, .{}) catch return null;
+    defer file.close(c.io);
+    const size = std.math.cast(usize, (file.stat(c.io) catch return null).size) orelse return null;
+    if (size < mapindex.header_len) return null;
+    var mm = std.Io.File.MemoryMap.create(c.io, file, .{
+        .len = size,
+        .protection = .{ .read = true, .write = false },
+    }) catch return null;
+    defer mm.destroy(c.io);
+    const ix = mapindex.open(mm.memory, key) orelse return null;
+    // Entries slice `text` only, so the index can be unmapped on return.
+    return indexVia(c.gpa, ix, text, wanted, mapindex.wyhash) catch null;
+}
+
+/// Rewrite the saved index for this table. Best effort: a failure only costs the next run a
+/// full scan. Temp file + rename, so concurrent runs never interleave into one file (and the
+/// record checksum refuses anything torn).
+fn saveIndex(c: vars.Ctx, key: mapindex.Key, text: []const u8) void {
+    const bytes = mapindex.build(c.gpa, text, key, mapindex.wyhash) catch return;
+    defer c.gpa.free(bytes);
+    const path = indexPath(c) catch return;
+    defer c.gpa.free(path);
+    const now = std.Io.Timestamp.now(c.io, .awake).nanoseconds;
+    const tmp = c.gpa.print("{s}.{d}.tmp", .{ path, now }) catch return;
+    defer c.gpa.free(tmp);
+    const cwd = std.Io.Dir.cwd();
+    if (std.fs.path.dirname(path)) |d| cwd.createDirPath(c.io, d) catch return;
+    cwd.writeFile(c.io, .{ .sub_path = tmp, .data = bytes }) catch return;
+    cwd.rename(tmp, cwd, path, c.io) catch {
+        cwd.deleteFile(c.io, tmp) catch {}; // zsnag:ok — best-effort cleanup of our own temp file
+    };
 }
 
 pub const remedy =

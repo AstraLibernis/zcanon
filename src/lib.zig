@@ -18,3 +18,5 @@ pub const daemon = @import("daemon.zig");
 pub const bugs = @import("bugs.zig");
 pub const publish = @import("publish.zig");
 pub const advice = @import("advice.zig");
+pub const zigver = @import("zigver.zig");
+pub const mapindex = @import("mapindex.zig");
