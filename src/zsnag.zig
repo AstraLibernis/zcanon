@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AstraLibernis
 
-//! zsnag — catch the mistakes an LLM tends to make writing Zig 0.16.
+//! zsnag — catch the mistakes an LLM tends to make writing modern Zig (0.16, 0.17).
 //!
 //!   zsnag file.zig [more.zig ...]    check files
 //!   zsnag --json file.zig           one JSON object per finding (JSONL)

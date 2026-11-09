@@ -163,6 +163,8 @@ Defects, closed explicitly rather than quietly. Opened 2026-08-10.
 
 | # | Status | Where | Defect |
 |---|---|---|---|
+| B37 | **OPEN** 2026-11-09 | `zsnag.zig` / `zcanon.zig` (stdout), upstream Zig | **On Windows, output written to a pipe can be cut off by a panic in Zig 0.17.1's std.** When the pipe fills (Git Bash `zsnag … \| grep`), `NtWriteFile` returns `STATUS_PENDING` on a handle std believes is blocking and `Io/Threaded.zig:11241` hits `.PENDING => unreachable, // unrecoverable: wrong File nonblocking flag`. ReleaseSafe panics part-way through the flush, so the output is truncated (40 std files: 843 lines to a file, 644 through a pipe). With `2>/dev/null` this looks like fewer findings. Output to a file is unaffected; the hook's small output has not been seen to trigger it. The old binary does it too, so B36 did not cause it. **Not fixed:** the bug is in std's choice of the stdout handle's flags; a local workaround (marking stdout nonblocking on Windows) is unproven. Next: check Zig's issue tracker, then decide between a workaround and waiting for upstream. Linux is unaffected (writev path). |
+| B36 | **CLOSED** 2026-11-09 | `snag.zig` | **zsnag missed Zig 0.17's deprecations and allocators.** R011 checked only `std.*` decl paths, so deprecated builtins (`@enumFromInt`, `@intFromEnum`, `@intFromFloat`) and members of a deprecated namespace (`std.builtin.X`, `std.fs.path.join`) passed silently, which is how 210 `std.fs.path` uses survived the port. R007 lacked `@fromBackingInt`; R008 lacked `SafeAllocator` and the bare decl literal `var da: std.heap.DebugAllocator(.{}) = .init;`. **Fixed:** builtins are map keys; R011 reports the shortest deprecated prefix; a bare "Deprecated." doc quotes the sentence after it. Each change has a test and a mutant that the test kills. Re-measured on std below. |
 | B35 | **CLOSED** 2026-10-02 | `setup.zig` | **doctor rewrote the installed skill while promising to change nothing.** The live probe in `setup`/`doctor` runs the hook with `ZCANON_BOOK` aimed at a throwaway book, but the skill path was the real one. Once the hook refreshed the skill's mistake list from the book it wrote, every probe wiped the real list (the probe's book is empty), and doctor then reported its own damage as "skill out of date". **Fixed:** the probe also gets `ZCANON_SKILL` under its own directory. A CLI test runs setup with a seeded book, then doctor, and requires the installed skill byte-identical; it fails with the fix reverted. |
 | B34 | **CLOSED** 2026-09-29 | `daemon.zig` | **The background compiler kept checking a project against its old build graph after build.zig changed.** `zig build --watch` recompiles sources but never re-runs the build script, and the daemon only re-read build.zig after the watcher exited, which a healthy watcher never does. Found in use: a module added to zsift's build.zig (`bench_options`) was reported as `no module named 'bench_options'` on every edit for hours, while a fresh `zig build check` passed. **Fixed:** a third daemon loop polls `build.zig` + `build.zig.zon` every 2 s and restarts the watcher when they change (a deliberate restart: no quick-exit count, no pause). CLI test: a module added in build.zig clears the error without restarting anything; it fails against the unfixed daemon. Follow-up the same day: while a project did not build, the wait loops still watched only build.zig, so fixing a broken build.zig.zon was never noticed; they now watch both (second CLI test, also failing before the fix). |
 | B33 | **CLOSED** 2026-09-29 | `setup.zig` | **`setup` overwrote the repo's skill template with the installed copy.** `~/.claude/skills/zcanon` had been a symlink into `skill/` since the 09-08 restore, so each install wrote this machine's paths over the `{{ZCANON}}`/`{{ZSNAG}}`/`{{ZEPHEM}}` placeholders, and 33d42a1 committed the result. The setup test only checked that the *installed* copy had no `{{`, which still passed. **Fixed:** template restored; `setup`/`doctor` now fail if the install path resolves to the template; CLI tests check that the template keeps its placeholders and that doctor catches the symlink case. The symlink on this machine was replaced with a real directory. |
@@ -262,6 +264,12 @@ cd "$STD" && find . -name '*.zig' -print0 \
   | grep -oP '\[R\d+ (error|warn|info)\]' | sort | uniq -c | sort -rn
 ```
 
+**On Windows, send zsnag's output to a file, not a pipe** (B37): Zig 0.17.1's stdout writer
+panics when a pipe fills, and `2>/dev/null` hides the panic, so the pipe above silently drops
+findings: 2026-11-09 it reported 298 R004 where there are 314, and a different count on each
+run. Write each batch to a file (`zsnag … >> out.txt 2>err.txt`), check `err.txt` for
+`panic`, then count from the file.
+
 **A raw total is the wrong metric** — most rules fire legitimately on std, and reading the
 total as "false positives" would be exactly the kind of unsupported claim this audit existed to
 catch. Split the rules by what a hit actually means:
@@ -281,6 +289,19 @@ So: **R001, R012 and R013 are the honesty check** — they claim something is im
 so a hit is a defect in the tool, in Zig, or in the map. The heuristics (R006, R008) are watched
 for movement, not for zero. The rest are working as designed and their counts mean nothing.
 
+**Re-baseline on Zig 0.17.1 (2026-11-09, 563 files, native Windows, output to files).** The
+same std run by the zsnag before and after B36, so a difference is the rule change and nothing
+else:
+
+| Rule | Before B36 | After B36 | Why it moved |
+|---|---:|---:|---|
+| R001 / R006 / R012 | 0 / 0 / 0 | 0 / 0 / 0 | — (D3's arity bug is gone from 0.17's std) |
+| R013 unknown path | 3 | 3 | — |
+| R008 acquire | 0 | **2** | the new SafeAllocator / bare-`.init` cases. Both are std fuzz tests that skip `deinit` on purpose (`heap/ArenaAllocator.zig:694` says so in a comment; `heap/SafeAllocator.zig:1615`). Expected heuristic hits. |
+| R011 deprecated | 191 | **411** | `std.builtin` 143, `std.fs.path` 47 (deprecated parent), `@intFromFloat` 31 (deprecated builtin), `std.fs.path.resolvePosix` 1. std has already moved off `@enumFromInt`/`@intFromEnum` (0 hits). |
+| R007 cast | 4197 | **4868** | `@fromBackingInt` added. Advisory. |
+| R004 / R005 / R009 / R010 / R014 / R015 | 314 / 120 / 14 / 40 / 3 / 10 | same | — |
+
 Two habits from the same audit, worth keeping:
 
 - **Measure, do not assert.** Every claim made from a small sample during the port turned out
@@ -289,16 +310,6 @@ Two habits from the same audit, worth keeping:
   This table itself is a case in point: the first version of it quoted "11 findings" because it
   counted only four rules, and would have read as a 400× regression the moment anyone ran the
   real command.
-- **Prove a fix by deleting the workaround, not by adding a test.** B1/B10 were proven fixed by
-  removing the `zsnag:ok` suppressions they had forced into `src/book.zig` and
-  `src/test/settings_test.zig` and requiring the tree to lint clean without them. A test written
-  to match one's own fix proves much less.
-
-Two habits from the same audit, worth keeping:
-
-- **Measure, do not assert.** Every claim made from a small sample during the port turned out
-  false in general ("byte-identical parity", "R012 fires zero times", "R013 is low-noise") —
-  each was true of the handful of files actually tested. Sample size is the question to ask.
 - **Prove a fix by deleting the workaround, not by adding a test.** B1/B10 were proven fixed by
   removing the `zsnag:ok` suppressions they had forced into `src/book.zig` and
   `src/test/settings_test.zig` and requiring the tree to lint clean without them. A test written
