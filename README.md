@@ -224,7 +224,7 @@ docs/archive/   notes on removed components (zfact, the pgvector search)
 PLAN.md         how the pieces tie together + roadmap + bug ledger
 ```
 
-Verified against Zig 0.16.0, 2026-08-10. Pure Zig: no Nushell, no sqlite3, no database server —
+Verified against Zig 0.17.1, 2026-11-09. Pure Zig: no Nushell, no sqlite3, no database server —
 the book is one TSV. Std discovery/lookup lives in the companion zephem.
 
 ## License

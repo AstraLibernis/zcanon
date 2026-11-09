@@ -29,7 +29,7 @@ pub fn resolve(c: vars.Ctx) ?Exe {
         if (inDir(c, ".")) |hit| return hit.exe;
     }
     const path_var = c.get("PATH") orelse return null;
-    var it = std.mem.tokenizeScalar(u8, path_var, std.fs.path.delimiter);
+    var it = std.mem.tokenizeScalar(u8, path_var, std.Io.Dir.path.delimiter);
     while (it.next()) |dir| {
         if (inDir(c, dir)) |hit| return hit.exe;
     }
@@ -48,7 +48,7 @@ fn inDir(c: vars.Ctx, dir: []const u8) ?Hit {
         var found_exe = false;
         var found_other = false;
         for (names) |n| {
-            const p = std.fs.path.join(c.gpa, &.{ dir, n }) catch return .{ .exe = null };
+            const p = std.Io.Dir.path.join(c.gpa, &.{ dir, n }) catch return .{ .exe = null };
             defer c.gpa.free(p);
             const st = std.Io.Dir.cwd().statFile(c.io, p, .{}) catch continue;
             if (st.kind != .file) continue;
@@ -56,11 +56,11 @@ fn inDir(c: vars.Ctx, dir: []const u8) ?Hit {
         }
         if (!found_exe and !found_other) return null;
         if (found_other) return .{ .exe = null };
-        const p = std.fs.path.join(c.gpa, &.{ dir, "zig.exe" }) catch return .{ .exe = null };
+        const p = std.Io.Dir.path.join(c.gpa, &.{ dir, "zig.exe" }) catch return .{ .exe = null };
         defer c.gpa.free(p);
         return .{ .exe = identify(c, p) };
     }
-    const p = std.fs.path.join(c.gpa, &.{ dir, "zig" }) catch return .{ .exe = null };
+    const p = std.Io.Dir.path.join(c.gpa, &.{ dir, "zig" }) catch return .{ .exe = null };
     defer c.gpa.free(p);
     // execvp skips entries it cannot execute, so must we.
     std.Io.Dir.cwd().access(c.io, p, .{ .execute = true }) catch return null;
@@ -83,7 +83,7 @@ fn identify(c: vars.Ctx, p: []const u8) ?Exe {
 pub fn cachePath(c: vars.Ctx) ![]u8 {
     const dir = try vars.configDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "zig-version" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "zig-version" });
 }
 
 /// One line: `<path>\t<size>\t<mtime ns>\t<version>`. Caller frees.
@@ -138,7 +138,7 @@ pub fn store(c: vars.Ctx, e: Exe, version: []const u8) void {
     const tmp = c.gpa.print("{s}.{d}.tmp", .{ path, now }) catch return;
     defer c.gpa.free(tmp);
     const cwd = std.Io.Dir.cwd();
-    if (std.fs.path.dirname(path)) |d| cwd.createDirPath(c.io, d) catch return;
+    if (std.Io.Dir.path.dirname(path)) |d| cwd.createDirPath(c.io, d) catch return;
     cwd.writeFile(c.io, .{ .sub_path = tmp, .data = text }) catch return;
     cwd.rename(tmp, cwd, path, c.io) catch {
         cwd.deleteFile(c.io, tmp) catch {}; // zsnag:ok — best-effort cleanup of our own temp file

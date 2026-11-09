@@ -210,7 +210,7 @@ fn phaseHookable(c: vars.Ctx, r: *Report) !bool {
     }
 
     const sp = try vars.settingsPath(c);
-    const dir = std.fs.path.dirname(sp) orelse ".";
+    const dir = std.Io.Dir.path.dirname(sp) orelse ".";
     if (!exists(c, dir) and c.get("ZCANON_SETTINGS") == null) {
         try r.line(.fail, "no Claude Code config directory at {s}", .{dir});
         try r.todo("install Claude Code and start it once, or set CLAUDE_CONFIG_DIR to where it lives", .{});
@@ -226,7 +226,7 @@ fn phaseHookable(c: vars.Ctx, r: *Report) !bool {
 
     // Prove we can write beside it; the install writes a temp file there and renames it.
     std.Io.Dir.cwd().createDirPath(c.io, dir) catch {}; // zsnag:ok — the write below reports it
-    const probe = try std.fs.path.join(c.gpa, &.{ dir, ".zcanon-write-test" });
+    const probe = try std.Io.Dir.path.join(c.gpa, &.{ dir, ".zcanon-write-test" });
     if (std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = probe, .data = "" })) |_| {
         std.Io.Dir.cwd().deleteFile(c.io, probe) catch {}; // zsnag:ok — cleanup of an empty file
         try r.line(.ok, "settings directory is writable", .{});
@@ -314,22 +314,22 @@ fn liveTest(c: vars.Ctx, r: *Report, sp: []const u8, mode: Mode) !void {
     };
 
     const cfg = try vars.configDir(c);
-    const dir = try std.fs.path.join(c.gpa, &.{ cfg, "probe" });
+    const dir = try std.Io.Dir.path.join(c.gpa, &.{ cfg, "probe" });
     defer std.Io.Dir.cwd().deleteTree(c.io, dir) catch {}; // zsnag:ok — best-effort probe cleanup
-    const probe = try std.fs.path.join(c.gpa, &.{ dir, "probe.zig" });
+    const probe = try std.Io.Dir.path.join(c.gpa, &.{ dir, "probe.zig" });
     try writeFileMkdir(c, probe, PROBE_SRC);
 
     const payload = try c.gpa.print("{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{f}}}}}", .{std.json.fmt(probe, .{})});
-    const in_path = try std.fs.path.join(c.gpa, &.{ dir, "payload.json" });
-    const out_path = try std.fs.path.join(c.gpa, &.{ dir, "out.json" });
-    const err_path = try std.fs.path.join(c.gpa, &.{ dir, "err.txt" });
+    const in_path = try std.Io.Dir.path.join(c.gpa, &.{ dir, "payload.json" });
+    const out_path = try std.Io.Dir.path.join(c.gpa, &.{ dir, "out.json" });
+    const err_path = try std.Io.Dir.path.join(c.gpa, &.{ dir, "err.txt" });
     try writeFileMkdir(c, in_path, payload);
 
     var env = try c.env.clone(c.gpa);
-    try env.put("ZCANON_BOOK", try std.fs.path.join(c.gpa, &.{ dir, "book.tsv" }));
+    try env.put("ZCANON_BOOK", try std.Io.Dir.path.join(c.gpa, &.{ dir, "book.tsv" }));
     // The hook refreshes the installed skill's mistake list from the book it writes; aimed at
     // the probe's empty book, it would wipe the real skill's list. Give it a skill of its own.
-    try env.put("ZCANON_SKILL", try std.fs.path.join(c.gpa, &.{ dir, "SKILL.md" }));
+    try env.put("ZCANON_SKILL", try std.Io.Dir.path.join(c.gpa, &.{ dir, "SKILL.md" }));
 
     const term = runShell(c, cmd, &env, in_path, out_path, err_path) catch |e| {
         try r.line(.fail, "live test: could not run the installed command ({s})", .{@errorName(e)});
@@ -382,9 +382,9 @@ fn liveTest(c: vars.Ctx, r: *Report, sp: []const u8, mode: Mode) !void {
 fn skill(c: vars.Ctx, r: *Report, mode: Mode) !void {
     const self = try vars.selfExe(c);
     // <repo>/zig-out/bin/zcanon -> <repo>/skill/SKILL.md
-    const bin = std.fs.path.dirname(self) orelse ".";
-    const repo = std.fs.path.dirname(std.fs.path.dirname(bin) orelse ".") orelse ".";
-    const src_path = try std.fs.path.join(c.gpa, &.{ repo, "skill", "SKILL.md" });
+    const bin = std.Io.Dir.path.dirname(self) orelse ".";
+    const repo = std.Io.Dir.path.dirname(std.Io.Dir.path.dirname(bin) orelse ".") orelse ".";
+    const src_path = try std.Io.Dir.path.join(c.gpa, &.{ repo, "skill", "SKILL.md" });
     const template = std.Io.Dir.cwd().readFileAlloc(c.io, src_path, c.gpa, .unlimited) catch {
         try r.line(.info, "skill: no skill/SKILL.md beside this build; skipped", .{});
         return;
@@ -486,7 +486,7 @@ fn exists(c: vars.Ctx, path: []const u8) bool {
 }
 
 fn writeFileMkdir(c: vars.Ctx, path: []const u8, data: []const u8) !void {
-    if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(c.io, d);
+    if (std.Io.Dir.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(c.io, d);
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = data });
 }
 
@@ -674,7 +674,7 @@ fn removeSkill(c: vars.Ctx, r: *Report) !void {
         };
         try r.line(.removed, "{s}", .{p});
     }
-    if (std.fs.path.dirname(skill_path)) |dir| {
+    if (std.Io.Dir.path.dirname(skill_path)) |dir| {
         // Only if now empty; deleteDir refuses a non-empty directory.
         std.Io.Dir.cwd().deleteDir(c.io, dir) catch {}; // zsnag:ok — non-empty means the user keeps it
     }

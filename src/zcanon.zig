@@ -54,11 +54,8 @@ const usage =
 ;
 
 pub fn main(init: std.process.Init) !void {
-    // zsnag:ok — R009: page_allocator is the arena's BACKING allocator here, not a general
-    // allocator handed to callers. Same idiom as zephem's dispatcher.
-    var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator); // zsnag:ok
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    // The process arena std sets up for `main`; it is freed at exit. Same as zephem's dispatcher.
+    const arena = init.arena.allocator();
 
     const c: vars.Ctx = .{ .gpa = arena, .io = init.io, .env = init.environ_map };
     const args = try init.minimal.args.toSlice(arena);
@@ -154,7 +151,7 @@ fn runHook(c: vars.Ctx) !void {
     for (files, 0..) |f, i| {
         const src = f.src orelse continue;
         const a = try run.analyze(i, f.path, src);
-        if (try hook.renderContext(c.gpa, std.fs.path.basename(f.path), f.path, a.findings, view)) |b| {
+        if (try hook.renderContext(c.gpa, std.Io.Dir.path.basename(f.path), f.path, a.findings, view)) |b| {
             if (body.written().len > 0) try body.writer.writeAll("\n\n");
             try body.writer.writeAll(b);
         }
@@ -225,7 +222,7 @@ fn changedZig(c: vars.Ctx, roots: []const []const u8, since: i96, out: *std.Arra
                     if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
                     const st = dir.statFile(c.io, entry.path, .{}) catch continue;
                     if (st.mtime.nanoseconds <= since) continue;
-                    try found.append(c.gpa, .{ .path = try std.fs.path.join(c.gpa, &.{ root, entry.path }), .mtime = st.mtime.nanoseconds });
+                    try found.append(c.gpa, .{ .path = try std.Io.Dir.path.join(c.gpa, &.{ root, entry.path }), .mtime = st.mtime.nanoseconds });
                 },
                 else => {},
             }
@@ -258,7 +255,7 @@ fn stampTime(c: vars.Ctx, path: []const u8) ?i96 {
 
 /// Best-effort: a failure here only means the next Bash run looks further back.
 fn touch(c: vars.Ctx, path: []const u8) void {
-    if (std.fs.path.dirname(path)) |d| std.Io.Dir.cwd().createDirPath(c.io, d) catch return;
+    if (std.Io.Dir.path.dirname(path)) |d| std.Io.Dir.cwd().createDirPath(c.io, d) catch return;
     std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = "" }) catch {}; // zsnag:ok — best-effort, see doc comment
 }
 
@@ -463,7 +460,7 @@ const Run = struct {
                         var fresh: std.ArrayList(book.Record) = .empty;
                         for (rep.diags) |d| {
                             if (!std.mem.eql(u8, d.severity, "error")) continue;
-                            const abs = try std.fs.path.resolveAlloc(c.gpa, &.{ s.root, d.path });
+                            const abs = try std.Io.Dir.path.resolveAlloc(c.gpa, &.{ s.root, d.path });
                             try fresh.append(c.gpa, r.recordOf(abs, book.COMPILE_RULE, "error", d.line, d.col, d.message, ""));
                         }
                         r.record(.{ .under = s.root }, fresh.items, &.{book.GROUP_COMPILE});
@@ -472,9 +469,9 @@ const Run = struct {
                     // Drop what the syntax check already reported for a file checked this run.
                     var diags: std.ArrayList(semantic.Diag) = .empty;
                     for (rep.diags) |d| {
-                        const abs = try std.fs.path.resolveAlloc(c.gpa, &.{ s.root, d.path });
+                        const abs = try std.Io.Dir.path.resolveAlloc(c.gpa, &.{ s.root, d.path });
                         const dup = for (r.ast_seen.items) |a| {
-                            const same_file = std.mem.eql(u8, try std.fs.path.resolveAlloc(c.gpa, &.{a.path}), abs);
+                            const same_file = std.mem.eql(u8, try std.Io.Dir.path.resolveAlloc(c.gpa, &.{a.path}), abs);
                             if (same_file and a.f.line == d.line and a.f.col == d.col and std.mem.eql(u8, a.f.message, d.message)) break true;
                         } else false;
                         if (!dup) try diags.append(c.gpa, d);
@@ -657,7 +654,7 @@ fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
             if (tier.classify(finding.severity, f.path) == .blocking) blocking = true;
         }
         if (hook.wantsHint(view, a.findings)) hint = true;
-        const base = std.fs.path.basename(f.path);
+        const base = std.Io.Dir.path.basename(f.path);
         if (try hook.renderContext(c.gpa, base, f.path, a.findings, view)) |body| {
             try w.interface.print("{s}\n", .{body});
         } else {
@@ -679,7 +676,7 @@ fn runCheck(c: vars.Ctx, args: []const []const u8) !void {
 /// A file kept beside the book.
 fn sidePath(c: vars.Ctx, name: []const u8) ![]const u8 {
     const book_path = try vars.bookPath(c);
-    return std.fs.path.join(c.gpa, &.{ std.fs.path.dirname(book_path) orelse ".", name });
+    return std.Io.Dir.path.join(c.gpa, &.{ std.Io.Dir.path.dirname(book_path) orelse ".", name });
 }
 
 /// The open set lives beside the book.
@@ -689,7 +686,7 @@ fn openPath(c: vars.Ctx) ![]const u8 {
 
 fn writeHistory(c: vars.Ctx, h: *const book.History) !void {
     const path = try vars.bookPath(c);
-    try std.Io.Dir.cwd().createDirPath(c.io, std.fs.path.dirname(path) orelse ".");
+    try std.Io.Dir.cwd().createDirPath(c.io, std.Io.Dir.path.dirname(path) orelse ".");
     var w: std.Io.Writer.Allocating = .init(c.gpa);
     try h.write(&w.writer);
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = w.written() });
@@ -698,8 +695,8 @@ fn writeHistory(c: vars.Ctx, h: *const book.History) !void {
 /// Fold the history into the bug report beside it; rewrite both files only when it changed.
 fn updateBugs(c: vars.Ctx, entries: []const book.Entry, now: []const u8) !void {
     const book_path = try vars.bookPath(c);
-    const dir = std.fs.path.dirname(book_path) orelse ".";
-    const tsv = try std.fs.path.join(c.gpa, &.{ dir, "bugs.tsv" });
+    const dir = std.Io.Dir.path.dirname(book_path) orelse ".";
+    const tsv = try std.Io.Dir.path.join(c.gpa, &.{ dir, "bugs.tsv" });
     var list: std.ArrayList(bugs.Bug) = .empty;
     if (std.Io.Dir.cwd().readFileAlloc(c.io, tsv, c.gpa, .unlimited)) |text| {
         try bugs.parse(c.gpa, text, &list);
@@ -711,11 +708,11 @@ fn updateBugs(c: vars.Ctx, entries: []const book.Entry, now: []const u8) !void {
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = tsv, .data = w.written() });
     var md: std.Io.Writer.Allocating = .init(c.gpa);
     try bugs.render(&md.writer, list.items);
-    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try std.fs.path.join(c.gpa, &.{ dir, "bugs.md" }), .data = md.written() });
+    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try std.Io.Dir.path.join(c.gpa, &.{ dir, "bugs.md" }), .data = md.written() });
 }
 
 fn writeBook(c: vars.Ctx, b: *const book.Book, path: []const u8) !void {
-    const dir = std.fs.path.dirname(path) orelse ".";
+    const dir = std.Io.Dir.path.dirname(path) orelse ".";
     try std.Io.Dir.cwd().createDirPath(c.io, dir);
     var w: std.Io.Writer.Allocating = .init(c.gpa);
     try b.write(&w.writer);
@@ -770,7 +767,7 @@ fn runStatus(c: vars.Ctx) !void {
 
 fn setDisabled(c: vars.Ctx, off: bool) !void {
     const flag = try vars.disableFlagPath(c);
-    const dir = std.fs.path.dirname(flag) orelse ".";
+    const dir = std.Io.Dir.path.dirname(flag) orelse ".";
     try std.Io.Dir.cwd().createDirPath(c.io, dir);
     if (off) {
         try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = flag, .data = "" });
@@ -790,7 +787,7 @@ fn setDisabled(c: vars.Ctx, off: bool) !void {
 /// still configures and lists it. On any failure the original is put back.
 fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
     const dir = if (args.len > 0) args[0] else ".";
-    const path = try std.fs.path.join(c.gpa, &.{ dir, "build.zig" });
+    const path = try std.Io.Dir.path.join(c.gpa, &.{ dir, "build.zig" });
     const src = std.Io.Dir.cwd().readFileAllocOptions(c.io, path, c.gpa, .unlimited, .of(u8), 0) catch
         return fail(c, try c.gpa.print("no build.zig in {s}\n", .{dir}));
     const edited = semantic.addCheck(c.gpa, src) catch |e| return fail(c, switch (e) {
@@ -801,10 +798,10 @@ fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
     });
 
     // The original goes to zcanon's own folder, not the project's.
-    const backup_dir = try std.fs.path.join(c.gpa, &.{ try vars.configDir(c), "backups" });
+    const backup_dir = try std.Io.Dir.path.join(c.gpa, &.{ try vars.configDir(c), "backups" });
     try std.Io.Dir.cwd().createDirPath(c.io, backup_dir);
     var name: [16]u8 = undefined;
-    _ = std.fmt.bufPrint(&name, "{x:0>16}", .{std.hash.Wyhash.hash(0, path)}) catch unreachable; // zsnag:ok — 16 hex digits fit exactly
+    _ = std.mem.print(&name, "{x:0>16}", .{std.hash.Wyhash.hash(0, path)}) catch unreachable; // zsnag:ok — 16 hex digits fit exactly
     const backup = try c.gpa.print("{s}/{s}-build.zig", .{ backup_dir, &name });
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = backup, .data = src });
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = edited });
@@ -834,7 +831,7 @@ fn runAddCheck(c: vars.Ctx, args: []const []const u8) !void {
 /// it with the new targets.
 fn runTargets(c: vars.Ctx, args: []const []const u8) !void {
     const dir = try vars.absolute(c, if (args.len > 0) args[0] else ".");
-    const root = (try semantic.projectRoot(c.gpa, c.io, try std.fs.path.join(c.gpa, &.{ dir, "x.zig" }))) orelse
+    const root = (try semantic.projectRoot(c.gpa, c.io, try std.Io.Dir.path.join(c.gpa, &.{ dir, "x.zig" }))) orelse
         return fail(c, try c.gpa.print("no build.zig at or above {s}\n", .{dir}));
     const path = try daemon.targetsPath(c);
     var buf: [1024]u8 = undefined;
@@ -865,7 +862,7 @@ fn runDaemon(c: vars.Ctx, args: []const []const u8) !void {
     if (!is_status and !is_stop) return daemon.serve(c, try vars.absolute(c, args[0]));
 
     const dir = try vars.absolute(c, if (args.len > 1) args[1] else ".");
-    const probe = try std.fs.path.join(c.gpa, &.{ dir, "x.zig" });
+    const probe = try std.Io.Dir.path.join(c.gpa, &.{ dir, "x.zig" });
     const root = (try semantic.projectRoot(c.gpa, c.io, probe)) orelse
         return fail(c, try c.gpa.print("no build.zig at or above {s}\n", .{dir}));
     var buf: [4096]u8 = undefined;
@@ -905,7 +902,7 @@ fn runView(c: vars.Ctx, args: []const []const u8) !void {
         false
     else
         return fail(c, "usage: zcanon view [short|full]\n");
-    const dir = std.fs.path.dirname(flag) orelse ".";
+    const dir = std.Io.Dir.path.dirname(flag) orelse ".";
     try std.Io.Dir.cwd().createDirPath(c.io, dir);
     if (full) {
         try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = flag, .data = "" });
@@ -965,7 +962,7 @@ fn runPublish(c: vars.Ctx, args: []const []const u8) !void {
         const repo = publish.repoRoot(c, dir) orelse
             return fail(c, try c.gpa.print("{s} is not inside a git checkout\n", .{dir}));
         const flag = try publish.repoFlagPath(c);
-        try std.Io.Dir.cwd().createDirPath(c.io, std.fs.path.dirname(flag) orelse ".");
+        try std.Io.Dir.cwd().createDirPath(c.io, std.Io.Dir.path.dirname(flag) orelse ".");
         try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = flag, .data = try c.gpa.print("{s}\n", .{repo}) });
         try w.interface.print("daily publish on: {s}/{s}/ (the hook starts it at most once a day)\n", .{ repo, publish.dir_name });
     } else if (std.mem.eql(u8, sub, "off")) {
@@ -1026,9 +1023,9 @@ fn runPrune(c: vars.Ctx) !void {
 
 fn runBugs(c: vars.Ctx) !void {
     const book_path = try vars.bookPath(c);
-    const dir = std.fs.path.dirname(book_path) orelse ".";
+    const dir = std.Io.Dir.path.dirname(book_path) orelse ".";
     var list: std.ArrayList(bugs.Bug) = .empty;
-    if (std.Io.Dir.cwd().readFileAlloc(c.io, try std.fs.path.join(c.gpa, &.{ dir, "bugs.tsv" }), c.gpa, .unlimited)) |text| {
+    if (std.Io.Dir.cwd().readFileAlloc(c.io, try std.Io.Dir.path.join(c.gpa, &.{ dir, "bugs.tsv" }), c.gpa, .unlimited)) |text| {
         try bugs.parse(c.gpa, text, &list);
     } else |_| {}
     var buf: [1 << 16]u8 = undefined;

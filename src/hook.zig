@@ -136,8 +136,8 @@ pub fn bashRoots(arena: std.mem.Allocator, cwd: []const u8, home: ?[]const u8, c
     var it = std.mem.tokenizeAny(u8, command, " \t\r\n;&|()<>");
     while (it.next()) |raw| {
         const t = std.mem.trim(u8, raw, "\"'");
-        if (!std.mem.endsWith(u8, t, ".zig") or !std.fs.path.isAbsolute(t)) continue;
-        try roots.append(arena, std.fs.path.dirname(t) orelse continue);
+        if (!std.mem.endsWith(u8, t, ".zig") or !std.Io.Dir.path.isAbsolute(t)) continue;
+        try roots.append(arena, std.Io.Dir.path.dirname(t) orelse continue);
     }
 
     var uniq: std.ArrayList([]const u8) = .empty;

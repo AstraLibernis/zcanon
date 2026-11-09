@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     // ReleaseSafe by default, not Debug: the hook runs on every edit, and the installed binary
     // is whatever plain `zig build` produced. Safety checks stay live. `-Doptimize=Debug` to debug.
-    const optimize = b.option(std.builtin.Optimize, "optimize", "optimization mode (default: safe)") orelse .safe;
+    const optimize = b.option(std.lang.Optimize, "optimize", "optimization mode (default: safe)") orelse .safe;
 
     // zsnag: the LLM-footgun linter — written in Zig (the project dogfoods itself).
     // (std discovery/lookup — zlook/zmap — moved to zephem, which owns the std map.)

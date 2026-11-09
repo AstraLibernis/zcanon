@@ -208,7 +208,7 @@ const Owns = enum {
 
 /// Type names, matched as substrings of an identifier so `AutoHashMap`,
 /// `StringHashMapUnmanaged` and `MultiArrayList` count.
-const RESOURCE_TYPES = [_][]const u8{ "ArenaAllocator", "DebugAllocator", "Threaded" };
+const RESOURCE_TYPES = [_][]const u8{ "ArenaAllocator", "DebugAllocator", "SafeAllocator", "Threaded" };
 const COLLECTION_TYPES = [_][]const u8{
     "ArrayList", "HashMap", "BufSet", "BufMap", "PriorityQueue", "SegmentedList",
 };
@@ -476,7 +476,7 @@ fn scanTokens(st: Scanner, t: []const Tk) !void {
             .builtin => {
                 const w = st.text(tok);
                 if (eq(w, "@intCast") or eq(w, "@ptrCast") or eq(w, "@alignCast") or
-                    eq(w, "@enumFromInt") or eq(w, "@intFromFloat"))
+                    eq(w, "@enumFromInt") or eq(w, "@fromBackingInt") or eq(w, "@intFromFloat"))
                 {
                     // `x[@intCast(..)]` is already bounds-checked by the element access, so
                     // the warning would be redundant there. (Index casts dominate in ported C.)
@@ -525,7 +525,7 @@ fn isTypeDefinition(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool
 fn fnSpans(gpa: std.mem.Allocator, tree: *const std.zig.Ast) ![]Span {
     var spans: std.ArrayList(Span) = .empty;
     for (0..tree.nodes.len) |i| {
-        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i));
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i)); // zsnag:ok — R007: i < nodes.len, a valid node index
         // Test bodies are function bodies too: a leak in a test is still a leak.
         if (tree.nodeTag(node) != .fn_decl and tree.nodeTag(node) != .test_decl) continue;
         try spans.append(gpa, .{ .first = tree.firstToken(node), .last = tree.lastToken(node) });
@@ -592,10 +592,14 @@ fn acquisition(
         break :blk null;
     } else null;
 
-    // `.empty`
+    // `.empty`, and a bare `.init` on a resource: `var da: std.heap.DebugAllocator(.{}) = .init;`
+    // is how a DebugAllocator is made, so missing it missed the commonest leak-checker leak.
+    // A bare `.init` on anything else (a collection's or a user type's constant) acquires nothing.
     if (tree.nodeTag(n) == .enum_literal) {
-        if (!eq(tree.tokenSlice(tree.nodeMainToken(n)), "empty")) return null;
-        return .{ .owns = annotated orelse return null, .heap = false };
+        const tag = tree.tokenSlice(tree.nodeMainToken(n));
+        const owns = annotated orelse return null;
+        if (eq(tag, "empty") or (eq(tag, "init") and owns == .resource)) return .{ .owns = owns, .heap = false };
+        return null;
     }
 
     var buf: [1]std.zig.Ast.Node.Index = undefined;
@@ -662,7 +666,7 @@ fn scanAcquire(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t:
     // `const T = struct { … }` the span was the whole struct body, and in `fn f(s: []const u8)`
     // the `const` inside the type bound to `u8` and swallowed the function body.
     for (0..tree.nodes.len) |i| {
-        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i));
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i)); // zsnag:ok — R007: i < nodes.len, a valid node index
         const decl = tree.fullVarDecl(node) orelse continue;
         const init_node = decl.ast.init_node.unwrap() orelse continue;
         if (isTypeDefinition(tree, init_node)) continue;
@@ -744,9 +748,9 @@ const big_undefined_elems: u64 = 4096;
 fn scanBigUndefined(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.Ast, t: []const Tk, io: ?std.Io) !void {
     const spans = try fnSpans(gpa, tree);
     defer gpa.free(spans);
-    var ev: SizeEval = .{ .gpa = gpa, .io = io, .dir = std.fs.path.dirname(st.path) orelse "." };
+    var ev: SizeEval = .{ .gpa = gpa, .io = io, .dir = std.Io.Dir.path.dirname(st.path) orelse "." };
     for (0..tree.nodes.len) |i| {
-        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i));
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i)); // zsnag:ok — R007: i < nodes.len, a valid node index
         const decl = tree.fullVarDecl(node) orelse continue;
         const init_node = decl.ast.init_node.unwrap() orelse continue;
         if (tree.nodeTag(init_node) != .identifier or !eq(tree.tokenSlice(tree.nodeMainToken(init_node)), "undefined")) continue;
@@ -817,7 +821,7 @@ const SizeEval = struct {
         const init = rootConst(tree, tree.tokenSlice(tree.nodeMainToken(lhs))) orelse return null;
         const rel = importPath(tree, init) orelse return null;
         if (!std.mem.endsWith(u8, rel, ".zig")) return null; // a package, not a file beside us
-        const path = std.fs.path.join(e.gpa, &.{ e.dir, rel }) catch return null;
+        const path = std.Io.Dir.path.join(e.gpa, &.{ e.dir, rel }) catch return null;
         defer e.gpa.free(path);
         const src = std.Io.Dir.cwd().readFileAllocOptions(io, path, e.gpa, .limited(16 << 20), .of(u8), 0) catch return null;
         defer e.gpa.free(src);
@@ -951,6 +955,8 @@ pub fn mapKeysTokens(gpa: std.mem.Allocator, src: [:0]const u8, t: []const Tk, k
     defer buf.deinit(gpa);
     var i: usize = 0;
     while (i < t.len) : (i += 1) {
+        // Builtins are rows of the map too (`@enumFromInt`), so R011 can see their deprecation.
+        if (t[i].tag == .builtin) try zephem.addKey(gpa, keys, src[t[i].start..t[i].end]);
         const j = (try stdChain(gpa, src, t, i, &buf)) orelse continue;
         // Down to `std` itself: `longestPrefixKind` can stop there too.
         var end = buf.items.len;
@@ -960,6 +966,23 @@ pub fn mapKeysTokens(gpa: std.mem.Allocator, src: [:0]const u8, t: []const Tk, k
         }
         i = j;
     }
+}
+
+/// R011's message: the backticked replacement when the doc names one, else the doc's
+/// deprecation sentence alone (a builtin's doc goes on to describe the builtin itself).
+fn deprecationMsg(gpa: std.mem.Allocator, path: []const u8, doc: []const u8) ![]const u8 {
+    if (zephem.deprecationOf(doc)) |repl|
+        return gpa.print("`{s}` is deprecated — the map says: use `{s}`.", .{ path, repl });
+    // "Deprecated. Use @fromBackingInt or @bitCast instead. Converts …": a bare "Deprecated."
+    // says nothing on its own, so keep the sentence after it.
+    var from: usize = 0;
+    var cut = std.mem.find(u8, doc, ". ") orelse doc.len;
+    if (cut == "Deprecated".len and cut < doc.len) {
+        from = cut + 2;
+        cut = std.mem.findPos(u8, doc, from, ". ") orelse doc.len;
+    }
+    const said = doc[from..@min(doc.len, cut + 1)];
+    return gpa.print("`{s}` is deprecated — the map says: {s}", .{ path, said });
 }
 
 /// R011/R012/R013 — the map-backed rules.
@@ -975,11 +998,33 @@ fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const 
     defer buf.deinit(gpa);
     var i: usize = 0;
     while (i < t.len) : (i += 1) {
+        // R011 on a builtin: Zig 0.17 deprecates `@enumFromInt`/`@intFromEnum` in the langref,
+        // which the map records like any std deprecation.
+        if (t[i].tag == .builtin) {
+            const name = st.text(t[i]);
+            if (map.get(name)) |e| if (zephem.isDeprecated(e.doc))
+                try st.emitMsg(t[i].start, .r011_deprecated, try deprecationMsg(gpa, name, e.doc));
+            continue;
+        }
         const j = (try stdChain(gpa, st.src, t, i, &buf)) orelse continue;
         // `std` alone carries no claim to check.
         if (buf.items.len == 3) {
             i = j;
             continue;
+        }
+
+        // R011 — deprecation, with the replacement read out of the map. The shortest deprecated
+        // prefix is reported: `std.builtin.OptimizeMode` is deprecated because `std.builtin` is,
+        // even though the member itself resolves (through the alias) to a live decl.
+        var end: usize = std.mem.findScalarPos(u8, buf.items, 4, '.') orelse buf.items.len;
+        while (true) {
+            const p = buf.items[0..end];
+            if (map.get(p)) |e| if (zephem.isDeprecated(e.doc)) {
+                try st.emitMsg(t[i].start, .r011_deprecated, try deprecationMsg(gpa, p, e.doc));
+                break;
+            };
+            if (end == buf.items.len) break;
+            end = std.mem.findScalarPos(u8, buf.items, end + 1, '.') orelse buf.items.len;
         }
 
         const entry = map.get(buf.items);
@@ -1001,15 +1046,6 @@ fn scanStdPaths(gpa: std.mem.Allocator, st: Scanner, t: []const Tk, map: *const 
             continue;
         }
         const e = entry.?;
-
-        // R011 — deprecation, with the replacement read out of the map.
-        if (zephem.isDeprecated(e.doc)) {
-            const msg = if (zephem.deprecationOf(e.doc)) |repl|
-                try gpa.print("`{s}` is deprecated — the map says: use `{s}`.", .{ buf.items, repl })
-            else
-                try gpa.print("`{s}` is deprecated — the map says: {s}", .{ buf.items, e.doc });
-            try st.emitMsg(t[i].start, .r011_deprecated, msg);
-        }
 
         // R012 — arity, only for a direct call on the resolved path.
         if (j < t.len and t[j].tag == .l_paren) {

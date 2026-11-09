@@ -213,7 +213,7 @@ pub fn render(gpa: std.mem.Allocator, root: Value) ![]u8 {
 /// Write via a sibling temp file + rename, so an interrupted write cannot leave the user
 /// with a truncated settings.json. The `.bak` copy is taken first, as the Nushell version did.
 pub fn save(c: vars.Ctx, path: []const u8, text: []const u8) !void {
-    const dir = std.fs.path.dirname(path) orelse ".";
+    const dir = std.Io.Dir.path.dirname(path) orelse ".";
     // Fail loudly: if the directory can't be made, the write below cannot succeed either,
     // and a swallowed error here is how you end up "installed" with nothing on disk.
     try std.Io.Dir.cwd().createDirPath(c.io, dir);

@@ -258,6 +258,53 @@ test "mapKeys asks for every chain, its prefixes, std, and the premise paths" {
     // `foo.std.bar` is not rooted at std.
     try testing.expect(!keys.contains("std.bar"));
     try testing.expectEqual(@as(usize, 5), keys.count());
+
+    // Builtins are map rows too, so R011 can read their deprecation.
+    try snag.mapKeys(gpa, "const e: E = @enumFromInt(x);", &keys);
+    try testing.expect(keys.contains("@enumFromInt"));
+}
+
+/// Map rows in zephem's lookup layout, the docs copied from the Zig 0.17.1 map.
+const deprecation_tsv =
+    "path\tdepth\tkind\tname\tn_children\tdetail\tsig\tdoc\trkind\trdetail\tcanon\tftype\tfval\tdelegate\tvis\tmod\n" ++
+    "@enumFromInt\t0\tbuiltin\t@enumFromInt\t0\t\t@enumFromInt(integer: anytype) anytype\tDeprecated. Use @fromBackingInt or @bitCast instead. Converts an integer into an enum value.\t\t\t\t\t\t\tpub\t\n" ++
+    "@fromBackingInt\t0\tbuiltin\t@fromBackingInt\t0\t\t@fromBackingInt(backing_int: BackingInt(T)) T\tConverts an integer into a enum, a packed struct or a packed union value.\t\t\t\t\t\t\tpub\t\n" ++
+    "std.builtin\t1\talias\tbuiltin\t0\t\t\tDeprecated; use `lang`. To be removed after Zig 0.17.0.\t\t\t\t\t\t\tpub\t\n" ++
+    "std.mem\t1\tns\tmem\t0\t\t\t\t\t\t\t\t\t\tpub\t\n" ++
+    "std.mem.indexOf\t2\tfn\tindexOf\t0\t\tfn indexOf(comptime T: type, h: []const T, n: []const T) ?usize\tDeprecated in favor of `find`.\t\t\t\t\t\t\tpub\t\n" ++
+    "std.mem.find\t2\tfn\tfind\t0\t\tfn find(comptime T: type, h: []const T, n: []const T) ?usize\t\t\t\t\t\t\t\tpub\t\n";
+
+test "R011 reads deprecations of builtins and of a parent namespace from the map" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const gpa = a.allocator();
+    var m = try zephem.parse(gpa, try gpa.dupe(u8, deprecation_tsv), null);
+    defer m.deinit();
+
+    const src =
+        \\const std = @import("std");
+        \\const E = enum(u8) { a };
+        \\pub fn f(x: u8) void {
+        \\    const e: E = @enumFromInt(x);
+        \\    const g: E = @fromBackingInt(x);
+        \\    _ = e;
+        \\    _ = g;
+        \\    _ = std.builtin.OptimizeMode.Debug;
+        \\    _ = std.mem.indexOf(u8, "a", "a");
+        \\    _ = std.mem.find(u8, "a", "a");
+        \\}
+    ;
+    var out: std.ArrayList(snag.Finding) = .empty;
+    try snag.scanWithOpts(gpa, "t.zig", src, &out, .{ .map = &m });
+    var got: std.ArrayList([]const u8) = .empty;
+    for (out.items) |f| if (f.id == .r011_deprecated) try got.append(gpa, f.msg);
+    const want = [_][]const u8{
+        "`@enumFromInt` is deprecated — the map says: Use @fromBackingInt or @bitCast instead.",
+        "`std.builtin` is deprecated — the map says: use `lang`.",
+        "`std.mem.indexOf` is deprecated — the map says: use `find`.",
+    };
+    try testing.expectEqual(want.len, got.items.len);
+    for (want, got.items) |w, g| try testing.expectEqualStrings(w, g);
 }
 
 test "structural rules report whether they ran" {
@@ -394,9 +441,11 @@ test "clean source produces nothing" {
 // ---- one case per rule: fires where it should, silent where it should not ------------
 //
 // Each positive was checked against the compiler: removed syntax/APIs fail to build, and
-// every R008 positive is reported as a leak by `zig test` itself, while its arena-backed
-// negative passes clean. The map rules (R011–R013) need the zephem map and are covered in
-// zephem_test.zig and the CLI tests.
+// every collection R008 positive is reported as a leak by `zig test` itself, while its
+// arena-backed negative passes clean. The allocator positives (DebugAllocator, SafeAllocator,
+// Threaded) compile and pass: an un-deinit'ed allocator that allocated nothing leaks nothing
+// yet, which is the case the rule exists to catch before it does. The map rules (R011–R013)
+// need the zephem map: see the R011 test above, zephem_test.zig and the CLI tests.
 
 const RuleCase = struct { name: []const u8, want: []const u8, src: [:0]const u8 };
 
@@ -416,6 +465,12 @@ const rule_cases = [_]RuleCase{
     .{ .name = "r007_int", .want = "R007", .src = "test { var big: u64 = 300; _ = &big; const v: u8 = @intCast(big); _ = v; }" },
     .{ .name = "r007_index_neg", .want = "", .src = "test { const a = [_]u8{1,2}; var i: u64 = 1; _ = &i; _ = a[@intCast(i)]; }" },
     .{ .name = "r007_enum", .want = "R007", .src = "const E = enum(u8) { a, b };\ntest { var x: u8 = 7; _ = &x; const e: E = @enumFromInt(x); _ = e; }" },
+    .{ .name = "r007_backing", .want = "R007", .src = "const E = enum(u8) { a, b };\ntest { var x: u8 = 7; _ = &x; const e: E = @fromBackingInt(x); _ = e; }" },
+    .{ .name = "r008_debug_alloc", .want = "R008", .src = "const std = @import(\"std\");\ntest { var da: std.heap.DebugAllocator(.{}) = .init; _ = da.allocator(); }" },
+    .{ .name = "r008_debug_alloc_neg", .want = "", .src = "const std = @import(\"std\");\ntest { var da: std.heap.DebugAllocator(.{}) = .init; defer _ = da.deinit(); _ = da.allocator(); }" },
+    .{ .name = "r008_safe_alloc", .want = "R008", .src = "const std = @import(\"std\");\ntest { var sa: std.heap.SafeAllocator = .init(std.testing.allocator, .{}); _ = sa.allocator(); }" },
+    .{ .name = "r008_safe_alloc_neg", .want = "", .src = "const std = @import(\"std\");\ntest { var sa: std.heap.SafeAllocator = .init(std.testing.allocator, .{}); defer _ = sa.deinit(); _ = sa.allocator(); }" },
+    .{ .name = "r008_init_const_neg", .want = "", .src = "const S = struct { x: u8 = 0, pub const init: S = .{}; };\ntest { var s: S = .init; _ = &s; }" },
     .{ .name = "r007_float", .want = "R007", .src = "test { var f: f64 = 1e30; _ = &f; const i: u8 = @intFromFloat(f); _ = i; }" },
     .{ .name = "r008_legacy", .want = "R008", .src = "const std = @import(\"std\");\ntest { var l = std.ArrayList(u8).init(std.testing.allocator); _ = &l; }" },
     .{ .name = "r008_empty", .want = "R008", .src = "const std = @import(\"std\");\ntest { var l: std.ArrayList(u8) = .empty; try l.append(std.testing.allocator, 1); }" },
@@ -479,7 +534,7 @@ test "R015 follows an array length into an imported file" {
     const dir = try tmp.dir.realPathFileAlloc(io, ".", gpa);
     try tmp.dir.writeFile(io, .{ .sub_path = "data.zig", .data = "const std = @import(\"std\");\npub const BinIdx = u16;\npub const max_bins = std.math.maxInt(BinIdx);\n" });
     const src: [:0]const u8 = "const data = @import(\"data.zig\");\nconst K = struct { bin: data.BinIdx, key: f64 };\nfn f() void { var s: [data.max_bins]K = undefined; _ = &s; }\n";
-    const path = try std.fs.path.join(gpa, &.{ dir, "split.zig" });
+    const path = try std.Io.Dir.path.join(gpa, &.{ dir, "split.zig" });
 
     var with_io: std.ArrayList(snag.Finding) = .empty;
     try snag.scanWithOpts(gpa, path, src, &with_io, .{ .io = io });

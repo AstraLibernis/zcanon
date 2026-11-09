@@ -237,10 +237,10 @@ fn cell(w: *std.Io.Writer, s: []const u8) !void {
 /// The project a file belongs to: the name of the nearest enclosing directory that holds a
 /// `.git`. A file in no repository is `-`, so a stray scratch path never leaks its folders.
 pub fn projectOf(c: vars.Ctx, file: []const u8) []const u8 {
-    var dir = std.fs.path.dirname(file);
-    while (dir) |d| : (dir = std.fs.path.dirname(d)) {
-        const dot_git = std.fs.path.join(c.gpa, &.{ d, ".git" }) catch return "-";
-        if (exists(c, dot_git)) return std.fs.path.basename(d);
+    var dir = std.Io.Dir.path.dirname(file);
+    while (dir) |d| : (dir = std.Io.Dir.path.dirname(d)) {
+        const dot_git = std.Io.Dir.path.join(c.gpa, &.{ d, ".git" }) catch return "-";
+        if (exists(c, dot_git)) return std.Io.Dir.path.basename(d);
     }
     return "-";
 }
@@ -253,7 +253,7 @@ fn exists(c: vars.Ctx, path: []const u8) bool {
 /// A file kept beside the book.
 pub fn sidePath(c: vars.Ctx, name: []const u8) ![]const u8 {
     const book_path = try vars.bookPath(c);
-    return std.fs.path.join(c.gpa, &.{ std.fs.path.dirname(book_path) orelse ".", name });
+    return std.Io.Dir.path.join(c.gpa, &.{ std.Io.Dir.path.dirname(book_path) orelse ".", name });
 }
 
 /// The repo the daily run publishes into; its presence is the on switch.
@@ -336,7 +336,7 @@ pub fn repoRoot(c: vars.Ctx, dir: []const u8) ?[]const u8 {
 /// The checkout this binary was built from (`<repo>/zig-out/bin/zcanon`).
 pub fn defaultRepo(c: vars.Ctx) ?[]const u8 {
     const self = vars.selfExe(c) catch return null;
-    return repoRoot(c, std.fs.path.dirname(self) orelse return null);
+    return repoRoot(c, std.Io.Dir.path.dirname(self) orelse return null);
 }
 
 pub const Outcome = union(enum) {
@@ -380,8 +380,8 @@ fn attemptOnce(c: vars.Ctx, repo: []const u8, entries: []const book.Entry, why: 
         _ = try must(c, wt, &.{ "reset", "--quiet", "--hard", remote_ref }, why);
     }
 
-    const hist_dir = try std.fs.path.join(c.gpa, &.{ wt, dir_name });
-    const tsv = try std.fs.path.join(c.gpa, &.{ hist_dir, tsv_name });
+    const hist_dir = try std.Io.Dir.path.join(c.gpa, &.{ wt, dir_name });
+    const tsv = try std.Io.Dir.path.join(c.gpa, &.{ hist_dir, tsv_name });
     var rows: std.ArrayList(Row) = .empty;
     if (std.Io.Dir.cwd().readFileAlloc(c.io, tsv, c.gpa, .unlimited)) |text| {
         try parse(c.gpa, text, &rows);
@@ -397,7 +397,7 @@ fn attemptOnce(c: vars.Ctx, repo: []const u8, entries: []const book.Entry, why: 
     try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = tsv, .data = t.written() });
     var md: std.Io.Writer.Allocating = .init(c.gpa);
     try render(c.gpa, &md.writer, rows.items);
-    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try std.fs.path.join(c.gpa, &.{ hist_dir, md_name }), .data = md.written() });
+    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try std.Io.Dir.path.join(c.gpa, &.{ hist_dir, md_name }), .data = md.written() });
 
     _ = try must(c, wt, &.{ "add", "--", dir_name }, why);
     if ((try git(c, wt, &.{ "diff", "--cached", "--quiet" })).ok) return .unchanged;

@@ -38,7 +38,7 @@ pub fn home(c: Ctx) Error![]const u8 {
 /// elsewhere, else `~/.claude`.
 pub fn claudeDir(c: Ctx) Error![]u8 {
     if (c.get("CLAUDE_CONFIG_DIR")) |p| return c.gpa.dupe(u8, p);
-    return std.fs.path.join(c.gpa, &.{ try home(c), ".claude" });
+    return std.Io.Dir.path.join(c.gpa, &.{ try home(c), ".claude" });
 }
 
 /// The Claude Code settings file the hook installs itself into.
@@ -47,7 +47,7 @@ pub fn settingsPath(c: Ctx) Error![]u8 {
     if (c.get("ZCANON_SETTINGS")) |p| return c.gpa.dupe(u8, p);
     const dir = try claudeDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "settings.json" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "settings.json" });
 }
 
 /// Where the skill is installed. `$ZCANON_SKILL` overrides, which is what the tests use.
@@ -55,13 +55,13 @@ pub fn skillPath(c: Ctx) Error![]u8 {
     if (c.get("ZCANON_SKILL")) |p| return c.gpa.dupe(u8, p);
     const dir = try claudeDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "skills", "zcanon", "SKILL.md" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "skills", "zcanon", "SKILL.md" });
 }
 
 /// Local state: the book and the hook's off switch.
 pub fn configDir(c: Ctx) Error![]u8 {
     if (c.get("ZCANON_CONFIG")) |p| return c.gpa.dupe(u8, p);
-    return std.fs.path.join(c.gpa, &.{ try home(c), ".config", "zcanon" });
+    return std.Io.Dir.path.join(c.gpa, &.{ try home(c), ".config", "zcanon" });
 }
 
 /// `$ZCANON_BOOK` overrides. Note the extension change from the sqlite era: the book is a
@@ -70,7 +70,7 @@ pub fn bookPath(c: Ctx) Error![]u8 {
     if (c.get("ZCANON_BOOK")) |p| return c.gpa.dupe(u8, p);
     const dir = try configDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "book.tsv" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "book.tsv" });
 }
 
 /// `zcanon setup` records the zephem checkout it found here, so nothing needs
@@ -78,7 +78,7 @@ pub fn bookPath(c: Ctx) Error![]u8 {
 pub fn zephemRecordPath(c: Ctx) Error![]u8 {
     const dir = try configDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "zephem-home" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "zephem-home" });
 }
 
 /// Touched at the end of every hook run. A Bash run checks every `.zig` file modified since —
@@ -87,30 +87,30 @@ pub fn stampPath(c: Ctx) Error![]u8 {
     if (c.get("ZCANON_STAMP")) |p| return c.gpa.dupe(u8, p);
     const dir = try configDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "last-hook" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "last-hook" });
 }
 
 /// Presence of this file disables the hook without touching settings.json.
 pub fn disableFlagPath(c: Ctx) Error![]u8 {
     const dir = try configDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "hook.disabled" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "hook.disabled" });
 }
 
 /// Presence of this file makes the hook report in the full view instead of the short one.
 pub fn fullViewFlagPath(c: Ctx) Error![]u8 {
     const dir = try configDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "view.full" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "view.full" });
 }
 
 /// `p` made absolute against the working directory. Daemons are keyed by project path, so
 /// `.` and the same directory spelled out must name one daemon, not two.
 pub fn absolute(c: Ctx, p: []const u8) ![]const u8 {
-    if (std.fs.path.isAbsolute(p)) return std.fs.path.resolveAlloc(c.gpa, &.{p});
+    if (std.Io.Dir.path.isAbsolute(p)) return std.Io.Dir.path.resolveAlloc(c.gpa, &.{p});
     var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = try std.process.currentPath(c.io, &buf);
-    return std.fs.path.resolveAlloc(c.gpa, &.{ buf[0..n], p });
+    return std.Io.Dir.path.resolveAlloc(c.gpa, &.{ buf[0..n], p });
 }
 
 /// Absolute path to this binary, so the installed hook command points at the running build
@@ -126,6 +126,6 @@ pub const zsnag_name = if (builtin.os.tag == .windows) "zsnag.exe" else "zsnag";
 /// zsnag lives beside the running zcanon binary.
 pub fn zsnagPath(c: Ctx) ![]u8 {
     const self = try selfExe(c);
-    const bin_dir = std.fs.path.dirname(self) orelse ".";
-    return std.fs.path.join(c.gpa, &.{ bin_dir, zsnag_name });
+    const bin_dir = std.Io.Dir.path.dirname(self) orelse ".";
+    return std.Io.Dir.path.join(c.gpa, &.{ bin_dir, zsnag_name });
 }

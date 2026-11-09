@@ -694,7 +694,7 @@ test "cli: zsnag runs R013 by default; --no-check-existence skips only R013" {
 // repo template, and 33d42a1 committed it. The template must keep its placeholders, and an
 // install path that resolves to the template must be refused.
 fn templatePath(s: *h.Sandbox) ![]const u8 {
-    return std.fs.path.join(s.gpa(), &.{ build_options.bin_dir, "..", "..", "skill", "SKILL.md" });
+    return std.Io.Dir.path.join(s.gpa(), &.{ build_options.bin_dir, "..", "..", "skill", "SKILL.md" });
 }
 
 test "cli: the repo's skill template keeps its placeholders" {

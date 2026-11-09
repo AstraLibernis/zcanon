@@ -46,8 +46,8 @@ pub fn enabled(c: vars.Ctx) bool {
 fn basePath(c: vars.Ctx, root: []const u8) ![]u8 {
     const dir = try vars.configDir(c);
     var name: [16]u8 = undefined;
-    _ = std.fmt.bufPrint(&name, "{x:0>16}", .{std.hash.Wyhash.hash(0, root)}) catch unreachable; // zsnag:ok — 16 hex digits fit exactly
-    return std.fs.path.join(c.gpa, &.{ dir, "d", &name });
+    _ = std.mem.print(&name, "{x:0>16}", .{std.hash.Wyhash.hash(0, root)}) catch unreachable; // zsnag:ok — 16 hex digits fit exactly
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "d", &name });
 }
 
 /// Why no daemon can serve `root`, or null if one can: a Unix socket path is limited to
@@ -61,7 +61,7 @@ pub fn unusable(c: vars.Ctx, root: []const u8) ?[]const u8 {
 
 /// Per-project extra targets for the background compiler.
 pub fn targetsPath(c: vars.Ctx) ![]const u8 {
-    return std.fs.path.join(c.gpa, &.{ try vars.configDir(c), "targets.tsv" });
+    return std.Io.Dir.path.join(c.gpa, &.{ try vars.configDir(c), "targets.tsv" });
 }
 
 /// This binary's identity: path and modification time. A daemon started by an older build
@@ -337,7 +337,7 @@ const Daemon = struct {
     /// build graph.
     fn buildFilesStamp(d: *Daemon) i96 {
         const zon = blk: {
-            const p = std.fs.path.join(d.c.gpa, &.{ d.root, "build.zig.zon" }) catch break :blk 0;
+            const p = std.Io.Dir.path.join(d.c.gpa, &.{ d.root, "build.zig.zon" }) catch break :blk 0;
             defer d.c.gpa.free(p);
             const st = std.Io.Dir.cwd().statFile(d.c.io, p, .{}) catch break :blk 0;
             break :blk st.mtime.nanoseconds;
@@ -362,7 +362,7 @@ const Daemon = struct {
     }
 
     fn buildZigMtime(d: *Daemon) i96 {
-        const p = std.fs.path.join(d.c.gpa, &.{ d.root, "build.zig" }) catch return 0;
+        const p = std.Io.Dir.path.join(d.c.gpa, &.{ d.root, "build.zig" }) catch return 0;
         defer d.c.gpa.free(p);
         const st = std.Io.Dir.cwd().statFile(d.c.io, p, .{}) catch return 0;
         return st.mtime.nanoseconds;
@@ -378,7 +378,7 @@ const Daemon = struct {
         const targets = try semantic.readTargets(d.c.gpa, d.c.io, try targetsPath(d.c), d.root);
         if (has and targets.len == 0) return d.root;
         const base = try basePath(d.c, d.root);
-        const dir = try vars.absolute(d.c, try std.fs.path.join(d.c.gpa, &.{ std.fs.path.dirname(std.fs.path.dirname(base).?).?, "wrap", std.fs.path.basename(base) }));
+        const dir = try vars.absolute(d.c, try std.Io.Dir.path.join(d.c.gpa, &.{ std.Io.Dir.path.dirname(std.Io.Dir.path.dirname(base).?).?, "wrap", std.Io.Dir.path.basename(base) }));
         try semantic.writeWrapper(d.c.gpa, d.c.io, dir, d.root, targets);
         return dir;
     }
@@ -518,7 +518,7 @@ pub fn serve(parent: vars.Ctx, root: []const u8) !void {
     const c: vars.Ctx = .{ .gpa = std.heap.smp_allocator, .io = parent.io, .env = parent.env };
 
     const base = try basePath(c, root);
-    if (std.fs.path.dirname(base)) |dir| try std.Io.Dir.cwd().createDirPath(c.io, dir);
+    if (std.Io.Dir.path.dirname(base)) |dir| try std.Io.Dir.cwd().createDirPath(c.io, dir);
     const lock_path = try c.gpa.print("{s}.lock", .{base});
     const lock_file = try std.Io.Dir.cwd().createFile(c.io, lock_path, .{ .truncate = false });
     defer lock_file.close(c.io);

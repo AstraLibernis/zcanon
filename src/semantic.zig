@@ -88,14 +88,14 @@ pub const Collector = struct {
 
 /// The nearest directory at or above `file`'s own that holds a build.zig, or null.
 pub fn projectRoot(gpa: std.mem.Allocator, io: std.Io, file: []const u8) !?[]const u8 {
-    var dir: []const u8 = std.fs.path.dirname(file) orelse return null;
+    var dir: []const u8 = std.Io.Dir.path.dirname(file) orelse return null;
     while (true) {
-        const candidate = try std.fs.path.join(gpa, &.{ dir, "build.zig" });
+        const candidate = try std.Io.Dir.path.join(gpa, &.{ dir, "build.zig" });
         defer gpa.free(candidate);
         if (std.Io.Dir.cwd().access(io, candidate, .{})) |_| {
             return try gpa.dupe(u8, dir);
         } else |_| {}
-        dir = std.fs.path.dirname(dir) orelse return null;
+        dir = std.Io.Dir.path.dirname(dir) orelse return null;
     }
 }
 
@@ -146,7 +146,7 @@ const twins_body =
 /// rewritten only when they differ, so an identical write does not restart the watcher.
 pub fn writeWrapper(gpa: std.mem.Allocator, io: std.Io, dir: []const u8, root: []const u8, targets: []const []const u8) !void {
     try std.Io.Dir.cwd().createDirPath(io, dir);
-    const rel = try std.fs.path.relativeAlloc(gpa, "/", null, dir, root);
+    const rel = try std.Io.Dir.path.relativeAlloc(gpa, "/", null, dir, root);
 
     var build: std.ArrayList(u8) = .empty;
     try build.appendSlice(gpa,
@@ -189,7 +189,7 @@ pub fn writeWrapper(gpa: std.mem.Allocator, io: std.Io, dir: []const u8, root: [
         \\
     , .{rel});
     for ([_][2][]const u8{ .{ "build.zig", build.items }, .{ "build.zig.zon", zon } }) |f| {
-        const path = try std.fs.path.join(gpa, &.{ dir, f[0] });
+        const path = try std.Io.Dir.path.join(gpa, &.{ dir, f[0] });
         const cur = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1 << 20)) catch "";
         if (std.mem.eql(u8, cur, f[1])) continue;
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = f[1] });
@@ -228,7 +228,7 @@ pub fn writeTargets(gpa: std.mem.Allocator, io: std.Io, path: []const u8, root: 
         for (targets, 0..) |t, i| try out.print(gpa, "{s}{s}", .{ if (i > 0) "," else "", t });
         try out.append(gpa, '\n');
     }
-    if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(io, d);
+    if (std.Io.Dir.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(io, d);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
 }
 

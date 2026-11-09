@@ -100,13 +100,18 @@ Full removal: `{{ZCANON}} uninstall`.
 None recorded yet. This list fills in from the book as mistakes are made.
 <!-- /zcanon:mistakes -->
 
-## Modern Zig 0.16 shapes your training data probably gets wrong
+## Modern Zig (0.16 / 0.17) shapes your training data probably gets wrong
 
     var list: std.ArrayList(u8) = .empty;   // NOT ArrayList(u8).init(gpa)
     defer list.deinit(gpa);                  // allocator passed to deinit
     try list.append(gpa, 'x');               // allocator passed to append
     const v: u8 = @intCast(big);             // ONE argument, not @intCast(u8, big)
     std.Io.Dir.cwd()                         // NOT std.fs.cwd(); file calls take an `io`
+    std.Io.Dir.path.join(gpa, …)             // 0.17: std.fs.path is deprecated
+    const e: E = @fromBackingInt(x);         // 0.17: NOT @enumFromInt; @backingInt, NOT @intFromEnum
+    const s = try gpa.print("{d}", .{n});    // 0.17: NOT std.fmt.allocPrint; std.mem.print, NOT bufPrint
+    std.lang.Optimize                        // 0.17: std.builtin is deprecated (std.lang)
+    const arena = init.arena.allocator();    // main(init: std.process.Init) already has an arena
 
 Confirm any other shape with `map find` before writing it.
 
@@ -118,10 +123,12 @@ Confirm any other shape with `map find` before writing it.
 - `catch unreachable` and empty `catch {}` — these hide or crash on real errors; handle them.
 - `Reader.stream()` returning `0` does **not** mean end of stream (that is
   `error.EndOfStream`) — keep looping, don't `break`.
-- `@intCast` / `@ptrCast` / `@alignCast` / `@enumFromInt` / `@intFromFloat` — can panic or
-  corrupt on an out-of-range value; verify it first.
+- `@intCast` / `@ptrCast` / `@alignCast` / `@fromBackingInt` (and the deprecated
+  `@enumFromInt`) / `@intFromFloat` — can panic or corrupt on an out-of-range value; verify it
+  first.
 - Acquire/release: an `openFile`/`createFile`/`openDir` needs `defer x.close(io)`; an
-  `ArenaAllocator`/`DebugAllocator`/`Io.Threaded` needs `defer x.deinit()`; a collection
+  `ArenaAllocator`/`DebugAllocator`/`SafeAllocator`/`Io.Threaded` needs `defer x.deinit()`
+  (`var da: std.heap.DebugAllocator(.{}) = .init;` included); a collection
   (`= .empty`, `.init(alloc)`) needs `deinit` unless its allocator is an arena.
 - `std.Io.File.stdout().writer(…)` writes at file offsets, so two runs redirected into one
   file overwrite each other. Use `.writerStreaming(…)` for stdout/stderr.
@@ -139,7 +146,9 @@ These three do not carry advice written by hand — they read the **zephem map**
 go stale the way a hardcoded "use X instead" does:
 
 - **R011** — the API is deprecated. The replacement is quoted *from the map*, e.g.
-  ``std.mem.indexOf` is deprecated — the map says: use `find`.``
+  ``std.mem.indexOf` is deprecated — the map says: use `find`.`` It covers builtins
+  (`@enumFromInt`) and a deprecated parent (`std.builtin.X`, `std.fs.path.join` report the
+  namespace). A method called on a value (`list.getLast()`) is not resolved, so not checked.
 - **R012** — the argument count disagrees with the map's signature, which is printed with the
   finding so you can see the real parameter list.
 - **R013** — a fully-qualified `std.*` path with no map entry: it may not exist (a removed

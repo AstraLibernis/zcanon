@@ -35,7 +35,7 @@ pub fn ambient(a: std.mem.Allocator, key: []const u8) ?[]const u8 {
 /// `$ZEPHEM_HOME`, else inside a zephem checkout beside this one.
 pub fn zephemLookup(a: std.mem.Allocator) ![]const u8 {
     if (ambient(a, "ZEPHEM_LOOKUP")) |p| return p;
-    if (ambient(a, "ZEPHEM_HOME")) |zh| return std.fs.path.join(a, &.{ zh, "data", "lookup.tsv" });
+    if (ambient(a, "ZEPHEM_HOME")) |zh| return std.Io.Dir.path.join(a, &.{ zh, "data", "lookup.tsv" });
     return build_options.zephem_sibling_lookup;
 }
 
@@ -79,12 +79,12 @@ pub const Sandbox = struct {
     }
 
     pub fn path(s: *Sandbox, rel: []const u8) ![]const u8 {
-        return std.fs.path.join(s.gpa(), &.{ s.dir, rel });
+        return std.Io.Dir.path.join(s.gpa(), &.{ s.dir, rel });
     }
 
     pub fn write(s: *Sandbox, rel: []const u8, contents: []const u8) ![]const u8 {
         const p = try s.path(rel);
-        if (std.fs.path.dirname(p)) |d| try std.Io.Dir.cwd().createDirPath(s.io, d);
+        if (std.Io.Dir.path.dirname(p)) |d| try std.Io.Dir.cwd().createDirPath(s.io, d);
         try std.Io.Dir.cwd().writeFile(s.io, .{ .sub_path = p, .data = contents });
         return p;
     }
@@ -158,7 +158,7 @@ pub const Sandbox = struct {
     fn runToolEnv(s: *Sandbox, tool: []const u8, args: []const []const u8, stdin: ?[]const u8, extra: []const [2][]const u8) !Result {
         const a = s.gpa();
         var argv: std.ArrayList([]const u8) = .empty;
-        try argv.append(a, try std.fs.path.join(a, &.{ s.bin, tool }));
+        try argv.append(a, try std.Io.Dir.path.join(a, &.{ s.bin, tool }));
         try argv.appendSlice(a, args);
 
         // A MINIMAL environment, built from scratch rather than inherited. Everything zcanon

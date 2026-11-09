@@ -77,19 +77,19 @@ test "resolve finds the first zig on PATH and keys it by path, size and mtime" {
     try putExe(tmp.dir, "a/" ++ zig_name, "first");
     try putExe(tmp.dir, "b/" ++ zig_name, "second binary");
 
-    const base = try std.fs.path.join(arena, &.{ ".zig-cache", "tmp", &tmp.sub_path });
-    const d: []const u8 = &.{std.fs.path.delimiter};
+    const base = try std.Io.Dir.path.join(arena, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    const d: []const u8 = &.{std.Io.Dir.path.delimiter};
     const path_var = try std.mem.concat(arena, u8, &.{
-        try std.fs.path.join(arena, &.{ base, "empty" }), d,
-        try std.fs.path.join(arena, &.{ base, "a" }),     d,
-        try std.fs.path.join(arena, &.{ base, "b" }),
+        try std.Io.Dir.path.join(arena, &.{ base, "empty" }), d,
+        try std.Io.Dir.path.join(arena, &.{ base, "a" }),     d,
+        try std.Io.Dir.path.join(arena, &.{ base, "b" }),
     });
     var env = std.process.Environ.Map.init(arena);
-    const c = try ctxWith(arena, &env, path_var, try std.fs.path.join(arena, &.{ base, "cfg" }));
+    const c = try ctxWith(arena, &env, path_var, try std.Io.Dir.path.join(arena, &.{ base, "cfg" }));
 
     const e = zigver.resolve(c) orelse return error.NotResolved;
-    try testing.expect(std.fs.path.isAbsolute(e.path));
-    try testing.expect(std.mem.endsWith(u8, e.path, std.fs.path.sep_str ++ "a" ++ std.fs.path.sep_str ++ zig_name));
+    try testing.expect(std.Io.Dir.path.isAbsolute(e.path));
+    try testing.expect(std.mem.endsWith(u8, e.path, std.Io.Dir.path.sep_str ++ "a" ++ std.Io.Dir.path.sep_str ++ zig_name));
     try testing.expectEqual(@as(u64, 5), e.size);
 
     // store, then hit; a changed binary (other size) misses
@@ -110,10 +110,10 @@ test "resolve gives up when the first match is a script, and finds nothing on an
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const base = try std.fs.path.join(arena, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+    const base = try std.Io.Dir.path.join(arena, &.{ ".zig-cache", "tmp", &tmp.sub_path });
 
     var env = std.process.Environ.Map.init(arena);
-    const nothing = try ctxWith(arena, &env, try std.fs.path.join(arena, &.{ base, "none" }), base);
+    const nothing = try ctxWith(arena, &env, try std.Io.Dir.path.join(arena, &.{ base, "none" }), base);
     try testing.expectEqual(@as(?zigver.Exe, null), zigver.resolve(nothing));
 
     if (builtin.os.tag == .windows) {
@@ -123,7 +123,7 @@ test "resolve gives up when the first match is a script, and finds nothing on an
         try putExe(tmp.dir, "s/zig.bat", "@echo 1.0.0");
         try putExe(tmp.dir, "zig.exe", "later");
         var env2 = std.process.Environ.Map.init(arena);
-        const pv = try std.mem.concat(arena, u8, &.{ try std.fs.path.join(arena, &.{ base, "s" }), ";", base });
+        const pv = try std.mem.concat(arena, u8, &.{ try std.Io.Dir.path.join(arena, &.{ base, "s" }), ";", base });
         const c = try ctxWith(arena, &env2, pv, base);
         try testing.expectEqual(@as(?zigver.Exe, null), zigver.resolve(c));
     } else {
@@ -132,7 +132,7 @@ test "resolve gives up when the first match is a script, and finds nothing on an
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "s/zig", .data = "not executable" });
         try putExe(tmp.dir, "zig", "later");
         var env2 = std.process.Environ.Map.init(arena);
-        const pv = try std.mem.concat(arena, u8, &.{ try std.fs.path.join(arena, &.{ base, "s" }), ":", base });
+        const pv = try std.mem.concat(arena, u8, &.{ try std.Io.Dir.path.join(arena, &.{ base, "s" }), ":", base });
         const c = try ctxWith(arena, &env2, pv, base);
         const e = zigver.resolve(c) orelse return error.NotResolved;
         try testing.expectEqual(@as(u64, 5), e.size);

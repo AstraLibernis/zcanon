@@ -61,7 +61,7 @@ pub const LoadError = error{
 pub fn lookupPath(c: vars.Ctx) ![]u8 {
     if (c.get("ZEPHEM_LOOKUP")) |p| return c.gpa.dupe(u8, p);
     const home = locateHome(c) orelse return error.ZephemNotFound;
-    return std.fs.path.join(c.gpa, &.{ home.path, "data", "lookup.tsv" });
+    return std.Io.Dir.path.join(c.gpa, &.{ home.path, "data", "lookup.tsv" });
 }
 
 /// How a zephem checkout was found — reported by `zcanon doctor` so a wrong guess is visible.
@@ -83,7 +83,7 @@ pub const Home = struct { path: []const u8, source: Source };
 
 /// A directory is a zephem checkout if it carries the committed map's PINNED stamp.
 pub fn isHome(c: vars.Ctx, dir: []const u8) bool {
-    const pinned = std.fs.path.join(c.gpa, &.{ dir, "data", "std", "PINNED" }) catch return false;
+    const pinned = std.Io.Dir.path.join(c.gpa, &.{ dir, "data", "std", "PINNED" }) catch return false;
     defer c.gpa.free(pinned);
     std.Io.Dir.cwd().access(c.io, pinned, .{}) catch return false;
     return true;
@@ -119,24 +119,24 @@ pub fn recorded(c: vars.Ctx) ?[]const u8 {
 /// `<parent>/zephem` for a binary at `<parent>/zcanon/zig-out/bin/zcanon`.
 fn sibling(c: vars.Ctx) ?[]const u8 {
     const self = vars.selfExe(c) catch return null;
-    const bin = std.fs.path.dirname(self) orelse return null;
-    const out = std.fs.path.dirname(bin) orelse return null;
-    const repo = std.fs.path.dirname(out) orelse return null;
-    const parent = std.fs.path.dirname(repo) orelse return null;
-    return std.fs.path.join(c.gpa, &.{ parent, "zephem" }) catch null;
+    const bin = std.Io.Dir.path.dirname(self) orelse return null;
+    const out = std.Io.Dir.path.dirname(bin) orelse return null;
+    const repo = std.Io.Dir.path.dirname(out) orelse return null;
+    const parent = std.Io.Dir.path.dirname(repo) orelse return null;
+    return std.Io.Dir.path.join(c.gpa, &.{ parent, "zephem" }) catch null;
 }
 
 /// The zephem binary inside a checkout.
 pub fn exePath(c: vars.Ctx, home: []const u8) ![]u8 {
     const name = if (builtin.os.tag == .windows) "zephem.exe" else "zephem";
-    return std.fs.path.join(c.gpa, &.{ home, "zig-out", "bin", name });
+    return std.Io.Dir.path.join(c.gpa, &.{ home, "zig-out", "bin", name });
 }
 
 /// zephem's dataset directory, for the PINNED stamp.
 pub fn dataDir(c: vars.Ctx) !?[]u8 {
     if (c.get("ZEPHEM_DATA")) |p| return try c.gpa.dupe(u8, p);
     const home = locateHome(c) orelse return null;
-    return try std.fs.path.join(c.gpa, &.{ home.path, "data", "std" });
+    return try std.Io.Dir.path.join(c.gpa, &.{ home.path, "data", "std" });
 }
 
 pub const Map = struct {
@@ -292,7 +292,7 @@ pub fn indexVia(gpa: std.mem.Allocator, ix: mapindex.Index, text: []const u8, wa
 pub fn indexPath(c: vars.Ctx) ![]u8 {
     const dir = try vars.configDir(c);
     defer c.gpa.free(dir);
-    return std.fs.path.join(c.gpa, &.{ dir, "lookup.idx" });
+    return std.Io.Dir.path.join(c.gpa, &.{ dir, "lookup.idx" });
 }
 
 /// The map through the saved index, or null when there is no usable index for this table.
@@ -325,7 +325,7 @@ fn saveIndex(c: vars.Ctx, key: mapindex.Key, text: []const u8) void {
     const tmp = c.gpa.print("{s}.{d}.tmp", .{ path, now }) catch return;
     defer c.gpa.free(tmp);
     const cwd = std.Io.Dir.cwd();
-    if (std.fs.path.dirname(path)) |d| cwd.createDirPath(c.io, d) catch return;
+    if (std.Io.Dir.path.dirname(path)) |d| cwd.createDirPath(c.io, d) catch return;
     cwd.writeFile(c.io, .{ .sub_path = tmp, .data = bytes }) catch return;
     cwd.rename(tmp, cwd, path, c.io) catch {
         cwd.deleteFile(c.io, tmp) catch {}; // zsnag:ok — best-effort cleanup of our own temp file
@@ -341,7 +341,7 @@ pub const remedy =
 pub fn staleness(c: vars.Ctx, zig_version: []const u8) !?[]const u8 {
     const dir = (try dataDir(c)) orelse return null;
     defer c.gpa.free(dir);
-    const pinned_path = try std.fs.path.join(c.gpa, &.{ dir, "PINNED" });
+    const pinned_path = try std.Io.Dir.path.join(c.gpa, &.{ dir, "PINNED" });
     defer c.gpa.free(pinned_path);
 
     const text = std.Io.Dir.cwd().readFileAlloc(c.io, pinned_path, c.gpa, .unlimited) catch return null;
