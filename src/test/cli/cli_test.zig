@@ -564,6 +564,40 @@ test "cli: uninstall leaves a skill that is not zcanon's" {
     try testing.expectEqualStrings(mine, try s.read("skills/zcanon/SKILL.md"));
 }
 
+test "cli: uninstall removes a zcanon skill whose name is the last frontmatter line" {
+    var s = try box("uninstall-name-last");
+    defer s.deinit();
+    const skill = [_][2][]const u8{.{ "ZCANON_SKILL", try s.path("skills/zcanon/SKILL.md") }};
+    _ = try s.write("skills/zcanon/SKILL.md", "---\ndescription: checks Zig\nname: zcanon\n---\nbody\n");
+
+    const u = try s.zcanonEnv(&.{"uninstall"}, &skill);
+    try testing.expectEqual(@as(u8, 0), u.code);
+    try testing.expect(!s.exists("skills/zcanon/SKILL.md"));
+}
+
+test "cli: runs at the same time all land in the book, none overwriting another" {
+    var s = try box("concurrent-book");
+    defer s.deinit();
+    const n = 16;
+    var runs: [n][]const []const u8 = undefined;
+    for (&runs, 0..) |*run, i| {
+        const file = try s.write(try s.gpa().print("f{d}.zig", .{i}), dirty_zig);
+        run.* = try s.gpa().dupe([]const u8, &.{ "check", file });
+    }
+    try testing.expectEqual(@as(usize, n), try s.zcanonAllAtOnce(&runs));
+
+    // Every run loads the book, adds its own file and writes all of it back: without the
+    // lock, a run that loaded before another saved wrote that one's rows away.
+    const open = try s.read("config/open.tsv");
+    const seen = try s.read("config/seen.txt");
+    for (0..n) |i| {
+        const name = try s.gpa().print("f{d}.zig\t", .{i});
+        try testing.expect(std.mem.find(u8, open, name) != null);
+        try testing.expect(std.mem.find(u8, seen, name[0 .. name.len - 1]) != null);
+    }
+    try testing.expectEqual(@as(usize, n), std.mem.count(u8, seen, "\n"));
+}
+
 test "cli: uninstall refuses to rewrite an unparseable settings file" {
     var s = try box("uninstall-badjson");
     defer s.deinit();

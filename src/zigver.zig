@@ -126,21 +126,12 @@ pub fn cached(c: vars.Ctx, e: Exe) ?[]const u8 {
 }
 
 /// Store `version` for `e`. Best effort: a failed write only costs the next run a spawn.
-/// Written to a temp file named after this process's clock, then renamed, so concurrent hook
-/// runs never interleave into one file.
+/// Written atomically, so concurrent hook runs never interleave into one file.
 pub fn store(c: vars.Ctx, e: Exe, version: []const u8) void {
     if (!validVersion(version)) return;
     const path = cachePath(c) catch return;
     defer c.gpa.free(path);
     const text = render(c.gpa, e, version) catch return;
     defer c.gpa.free(text);
-    const now = std.Io.Timestamp.now(c.io, .awake).nanoseconds;
-    const tmp = c.gpa.print("{s}.{d}.tmp", .{ path, now }) catch return;
-    defer c.gpa.free(tmp);
-    const cwd = std.Io.Dir.cwd();
-    if (std.Io.Dir.path.dirname(path)) |d| cwd.createDirPath(c.io, d) catch return;
-    cwd.writeFile(c.io, .{ .sub_path = tmp, .data = text }) catch return;
-    cwd.rename(tmp, cwd, path, c.io) catch {
-        cwd.deleteFile(c.io, tmp) catch {}; // zsnag:ok — best-effort cleanup of our own temp file
-    };
+    vars.writeFileAtomic(c, path, text) catch return;
 }

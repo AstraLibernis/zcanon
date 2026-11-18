@@ -97,11 +97,11 @@ test "upsert inserts once then bumps hits on recurrence" {
     defer b.deinit();
 
     const r = rec("a.zig", "R004", "catch unreachable", "x catch unreachable;");
-    try b.upsert(&.{r});
+    try b.upsert(&.{r}, null);
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqual(@as(u64, 1), b.recs.items[0].hits);
 
-    try b.upsert(&.{r});
+    try b.upsert(&.{r}, null);
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqual(@as(u64, 2), b.recs.items[0].hits);
 }
@@ -112,10 +112,10 @@ test "dedup key ignores line and col so a shifted finding is the same finding" {
     defer b.deinit();
 
     var r = rec("a.zig", "R004", "catch unreachable", "x catch unreachable;");
-    try b.upsert(&.{r});
+    try b.upsert(&.{r}, null);
     r.line = 99;
     r.col = 42;
-    try b.upsert(&.{r});
+    try b.upsert(&.{r}, null);
 
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqual(@as(u64, 2), b.recs.items[0].hits);
@@ -134,7 +134,7 @@ test "differing file, rule, message or snippet are distinct findings" {
         rec("a.zig", "R005", "m", "s"),
         rec("a.zig", "R004", "other", "s"),
         rec("a.zig", "R004", "m", "other"),
-    });
+    }, null);
     try testing.expectEqual(@as(usize, 5), b.recs.items.len);
 }
 
@@ -144,10 +144,10 @@ test "prune drops resolved findings for the scanned file only" {
     defer b.deinit();
 
     const keep = rec("a.zig", "R004", "still here", "s1");
-    try b.upsert(&.{ keep, rec("a.zig", "R005", "fixed", "s2"), rec("other.zig", "R005", "untouched", "s3") });
+    try b.upsert(&.{ keep, rec("a.zig", "R005", "fixed", "s2"), rec("other.zig", "R005", "untouched", "s3") }, null);
     try testing.expectEqual(@as(usize, 3), b.recs.items.len);
 
-    b.pruneFile("a.zig", &.{keep}, &.{ book.GROUP_CORE, book.GROUP_AST });
+    b.prune(.{ .file = "a.zig" }, &.{keep}, &.{ book.GROUP_CORE, book.GROUP_AST });
     try testing.expectEqual(@as(usize, 2), b.recs.items.len);
     try testing.expectEqualStrings("still here", b.recs.items[0].message);
     try testing.expectEqualStrings("untouched", b.recs.items[1].message);
@@ -161,16 +161,16 @@ test "a checker that did not run cannot prune its own history" {
     try b.upsert(&.{
         rec("a.zig", "R004", "zsnag finding", "s1"),
         rec("a.zig", book.AST_RULE, "ast finding", "s2"),
-    });
+    }, null);
 
     // zsnag crashed: only ast-check results are trustworthy this round.
-    b.pruneFile("a.zig", &.{}, &.{book.GROUP_AST});
+    b.prune(.{ .file = "a.zig" }, &.{}, &.{book.GROUP_AST});
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqualStrings("zsnag finding", b.recs.items[0].message);
 
     // now the reverse: ast-check did not run.
-    try b.upsert(&.{rec("a.zig", book.AST_RULE, "ast finding", "s2")});
-    b.pruneFile("a.zig", &.{}, &.{book.GROUP_CORE});
+    try b.upsert(&.{rec("a.zig", book.AST_RULE, "ast finding", "s2")}, null);
+    b.prune(.{ .file = "a.zig" }, &.{}, &.{book.GROUP_CORE});
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqualStrings("ast finding", b.recs.items[0].message);
 }
@@ -192,15 +192,15 @@ test "a syntax error cannot erase the structural rules' history" {
     try bk.upsert(&.{
         rec("a.zig", "R004", "token rule", "s1"),
         rec("a.zig", "R008", "unreleased acquire", "s2"),
-    });
+    }, null);
 
     // The file stopped parsing, so R008 never ran. Its silence is not "resolved".
-    bk.pruneFile("a.zig", &.{rec("a.zig", "R004", "token rule", "s1")}, &.{book.GROUP_CORE});
+    bk.prune(.{ .file = "a.zig" }, &.{rec("a.zig", "R004", "token rule", "s1")}, &.{book.GROUP_CORE});
     try testing.expectEqual(@as(usize, 2), bk.recs.items.len);
     try testing.expectEqualStrings("R008", bk.recs.items[1].rule);
 
     // With the structural group active, a genuinely fixed R008 does get pruned.
-    bk.pruneFile("a.zig", &.{rec("a.zig", "R004", "token rule", "s1")}, &.{ book.GROUP_CORE, book.GROUP_STRUCTURAL });
+    bk.prune(.{ .file = "a.zig" }, &.{rec("a.zig", "R004", "token rule", "s1")}, &.{ book.GROUP_CORE, book.GROUP_STRUCTURAL });
     try testing.expectEqual(@as(usize, 1), bk.recs.items.len);
 }
 
@@ -213,11 +213,11 @@ test "a zephem map failure cannot erase the map rules' history" {
         rec("a.zig", "R004", "core finding", "s1"),
         rec("a.zig", "R011", "deprecated API", "s2"),
         rec("a.zig", "R012", "wrong arity", "s3"),
-    });
+    }, null);
 
     // zsnag ran, but the zephem map failed to load — so only `core` is active. The map rules
     // produced nothing, and that silence must NOT be read as "resolved".
-    b.pruneFile("a.zig", &.{rec("a.zig", "R004", "core finding", "s1")}, &.{book.GROUP_CORE});
+    b.prune(.{ .file = "a.zig" }, &.{rec("a.zig", "R004", "core finding", "s1")}, &.{book.GROUP_CORE});
 
     try testing.expectEqual(@as(usize, 3), b.recs.items.len);
     try testing.expectEqualStrings("R011", b.recs.items[1].rule);
@@ -231,9 +231,9 @@ test "when the map group IS active, resolved map findings are pruned" {
     try b.upsert(&.{
         rec("a.zig", "R004", "core finding", "s1"),
         rec("a.zig", "R011", "deprecated API", "s2"),
-    });
+    }, null);
 
-    b.pruneFile("a.zig", &.{rec("a.zig", "R004", "core finding", "s1")}, &.{ book.GROUP_CORE, book.GROUP_MAP });
+    b.prune(.{ .file = "a.zig" }, &.{rec("a.zig", "R004", "core finding", "s1")}, &.{ book.GROUP_CORE, book.GROUP_MAP });
 
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqualStrings("R004", b.recs.items[0].rule);
@@ -243,9 +243,9 @@ test "no active groups prunes nothing at all" {
     const gpa = testing.allocator;
     var b: book.Book = .init(gpa);
     defer b.deinit();
-    try b.upsert(&.{ rec("a.zig", "R004", "m1", "s1"), rec("a.zig", book.AST_RULE, "m2", "s2") });
+    try b.upsert(&.{ rec("a.zig", "R004", "m1", "s1"), rec("a.zig", book.AST_RULE, "m2", "s2") }, null);
 
-    b.pruneFile("a.zig", &.{}, &.{});
+    b.prune(.{ .file = "a.zig" }, &.{}, &.{});
     try testing.expectEqual(@as(usize, 2), b.recs.items.len);
 }
 
@@ -256,7 +256,7 @@ test "write then parse round-trips the whole book" {
     try b.upsert(&.{
         rec("a.zig", "R004", "msg with\ttab", "    const x = 1; // snippet"),
         rec("b/c.zig", book.AST_RULE, "error: expected ';'", "line\\with\\backslashes"),
-    });
+    }, null);
     b.recs.items[0].hits = 7;
 
     var w: std.Io.Writer.Allocating = .init(gpa);
@@ -292,7 +292,7 @@ test "write keeps untouched rows verbatim and rewrites changed ones" {
     try b.parse(text);
     var bump = rec("b.zig", "R005", "bumped", "snip");
     bump.last_ts = "2026-09-01 00:00:00";
-    try b.upsert(&.{bump});
+    try b.upsert(&.{bump}, null);
 
     var w: std.Io.Writer.Allocating = .init(gpa);
     defer w.deinit();
@@ -382,14 +382,14 @@ test "history round-trips through its TSV" {
     try testing.expect(!book.isOpenFormat(w.written()));
 }
 
-test "upsertTracking reports only findings that were not already open" {
+test "upsert reports only findings that were not already open" {
     var b: book.Book = .init(testing.allocator);
     defer b.deinit();
     var new: std.ArrayList(book.Record) = .empty;
     defer new.deinit(testing.allocator);
     const r = rec("a.zig", "R004", "m", "s");
-    try b.upsertTracking(&.{r}, &new);
-    try b.upsertTracking(&.{r}, &new);
+    try b.upsert(&.{r}, &new);
+    try b.upsert(&.{r}, &new);
     try testing.expectEqual(@as(usize, 1), new.items.len);
 }
 
@@ -400,7 +400,7 @@ fn updated(gpa: std.mem.Allocator, text: []const u8, lazy: bool, scope: book.Boo
     if (lazy) try b.parseLazy(text) else try b.parse(text);
     try b.expand(scope);
     b.prune(scope, fresh, &.{ book.GROUP_CORE, book.GROUP_AST, book.GROUP_COMPILE });
-    try b.upsertTracking(fresh, new);
+    try b.upsert(fresh, new);
     var w: std.Io.Writer.Allocating = .init(gpa);
     errdefer w.deinit();
     try b.write(&w.writer);
@@ -451,7 +451,7 @@ test "upsert unpacks a packed row of the same file before matching it" {
     var b: book.Book = .init(gpa);
     defer b.deinit();
     try b.parseLazy(text);
-    try b.upsert(&.{rec("/p/a.zig", "R004", "seen", "x();")});
+    try b.upsert(&.{rec("/p/a.zig", "R004", "seen", "x();")}, null);
     try testing.expectEqual(@as(usize, 1), b.recs.items.len);
     try testing.expectEqual(@as(u64, 4), b.recs.items[0].hits);
     try testing.expectEqualStrings("seen", b.recs.items[0].message);

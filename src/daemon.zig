@@ -137,7 +137,7 @@ fn requestInner(c: vars.Ctx, root: []const u8, cmd: Cmd, keys: ?*const zephem.Ke
             reply.zig_version = try c.gpa.dupe(u8, val);
         } else if (std.mem.eql(u8, tag, "map")) {
             map_ok = std.mem.eql(u8, val, "ok");
-            if (!map_ok) reply.map_missing = try c.gpa.dupe(u8, std.mem.trimStart(u8, val, "missing "));
+            if (!map_ok) reply.map_missing = try c.gpa.dupe(u8, std.mem.cutPrefix(u8, val, "missing ") orelse val);
         } else if (std.mem.eql(u8, tag, "row")) {
             try rows.appendSlice(c.gpa, val);
             try rows.append(c.gpa, '\n');
@@ -198,13 +198,19 @@ const Daemon = struct {
     /// The last finished build's diagnostics; owned by `diag_text` (one allocation each).
     diags: std.ArrayList(semantic.Diag) = .empty,
     diag_text: std.ArrayList([]u8) = .empty,
+    /// Read and cleared by three threads; guarded by `mutex`.
     watcher_pid: ?std.posix.pid_t = null,
-    stopping: bool = false,
+    /// Set by any thread, read by all of them.
+    stopping: std.atomic.Value(bool) = .init(false),
     /// Set by `buildFileLoop` when it stops the watcher on purpose.
     restarting: std.atomic.Value(bool) = .init(false),
 
     fn now(d: *Daemon) i96 {
         return std.Io.Clock.real.now(d.c.io).nanoseconds;
+    }
+
+    fn isStopping(d: *Daemon) bool {
+        return d.stopping.load(.acquire);
     }
 
     fn lock(d: *Daemon) void {
@@ -246,7 +252,12 @@ const Daemon = struct {
 
     /// Reload the map when zephem rebuilt its table. Caller holds the lock.
     fn refreshMap(d: *Daemon) void {
-        const path = zephem.lookupPath(d.c) catch {
+        // Finding the table allocates (the recorded location, this binary's path). The daemon's
+        // allocator is not an arena, so those go in one freed here: this runs on every query.
+        var scratch: std.heap.ArenaAllocator = .init(d.c.gpa);
+        defer scratch.deinit();
+        const sc: vars.Ctx = .{ .gpa = scratch.allocator(), .io = d.c.io, .env = d.c.env };
+        const path = zephem.lookupPath(sc) catch {
             d.map_missing = "zephem not found; run `zcanon setup`";
             return;
         };
@@ -293,7 +304,7 @@ const Daemon = struct {
         if (!exe_ok or cmd == .stop) {
             try out.writeAll(if (exe_ok) "ok\nsem down\t0\tstopping\nend\n" else "stale\n");
             try out.flush();
-            d.stopping = true;
+            d.stopping.store(true, .release);
             return;
         }
 
@@ -351,7 +362,7 @@ const Daemon = struct {
     /// project's build files change; `watchLoop` starts it again on the new graph.
     fn buildFileLoop(d: *Daemon) void {
         var seen = d.buildFilesStamp();
-        while (!d.stopping) {
+        while (!d.isStopping()) {
             d.c.io.sleep(.fromSeconds(2), .awake) catch return;
             const stamp = d.buildFilesStamp();
             if (stamp == seen) continue;
@@ -387,7 +398,7 @@ const Daemon = struct {
     /// does not build.
     fn watchLoop(d: *Daemon) void {
         var quick_exits: u32 = 0;
-        while (!d.stopping) {
+        while (!d.isStopping()) {
             const seen_mtime = d.buildFilesStamp();
             const dir = d.checkDir() catch |e| {
                 d.setState(.down, @errorName(e));
@@ -395,12 +406,12 @@ const Daemon = struct {
                 continue;
             } orelse {
                 d.setState(.down, "build.zig does not build (`zig build -l` failed); waiting for it to change");
-                while (!d.stopping and d.buildFilesStamp() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
+                while (!d.isStopping() and d.buildFilesStamp() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
                 continue;
             };
             const began = d.now();
             d.runWatcher(dir) catch {}; // zsnag:ok — exit is handled below, whatever the cause
-            if (d.stopping) return;
+            if (d.isStopping()) return;
             if (d.restarting.swap(false, .acq_rel)) {
                 d.setState(.down, "build files changed; restarting the compiler watcher");
                 continue; // a deliberate restart, not a failure: no quick-exit count, no pause
@@ -408,7 +419,7 @@ const Daemon = struct {
             if (d.now() - began < 60 * std.time.ns_per_s) quick_exits += 1 else quick_exits = 0;
             if (quick_exits >= 5) {
                 d.setState(.down, "the compiler watcher keeps exiting; run `zig build check` in the project (or `zig build` if it has no check step) to see why");
-                while (!d.stopping and d.buildFilesStamp() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
+                while (!d.isStopping() and d.buildFilesStamp() == seen_mtime) d.c.io.sleep(.fromSeconds(2), .awake) catch return;
                 quick_exits = 0;
                 continue;
             }
@@ -429,7 +440,9 @@ const Daemon = struct {
             .stderr = .pipe,
             .pgid = vars.own_process_group, // so `killWatcher` can signal the whole group
         });
+        d.lock();
         d.watcher_pid = child.id;
+        d.unlock();
         defer {
             d.killWatcher();
             _ = child.wait(d.c.io) catch {}; // zsnag:ok — already killed; reaping only
@@ -464,8 +477,11 @@ const Daemon = struct {
     /// The watcher and everything it started (the build runner, the compiler) share its
     /// process group.
     fn killWatcher(d: *Daemon) void {
-        const pid = d.watcher_pid orelse return;
+        d.lock();
+        const taken = d.watcher_pid;
         d.watcher_pid = null;
+        d.unlock();
+        const pid = taken orelse return;
         // No process groups on Windows; unreachable there today (`enabled` is false on Windows).
         // Porting the daemon means a job object here.
         if (builtin.os.tag == .windows) return;
@@ -479,12 +495,12 @@ const Daemon = struct {
             d.lock();
             const idle = d.now() - d.last_request_ns > idle_ns;
             d.unlock();
-            if (idle or d.stopping) d.exit();
+            if (idle or d.isStopping()) d.exit();
         }
     }
 
     fn exit(d: *Daemon) noreturn {
-        d.stopping = true;
+        d.stopping.store(true, .release);
         d.killWatcher();
         std.Io.Dir.cwd().deleteFile(d.c.io, d.sock_path) catch {}; // zsnag:ok — best-effort cleanup
         std.process.exit(0);
@@ -552,8 +568,12 @@ pub fn serve(parent: vars.Ctx, root: []const u8) !void {
     var build_files = try c.io.concurrent(Daemon.buildFileLoop, .{&d});
     defer build_files.cancel(c.io);
 
-    while (!d.stopping) {
-        const stream = server.accept(c.io) catch continue;
+    while (!d.isStopping()) {
+        const stream = server.accept(c.io) catch {
+            // A failure that persists (no file descriptors left) must not spin a core.
+            c.io.sleep(.fromMilliseconds(100), .awake) catch {}; // zsnag:ok — a cancelled pause just retries sooner
+            continue;
+        };
         var arena: std.heap.ArenaAllocator = .init(c.gpa);
         d.handle(stream, arena.allocator()) catch {}; // zsnag:ok — one bad client must not stop the daemon
         arena.deinit();

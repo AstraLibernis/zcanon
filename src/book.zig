@@ -298,13 +298,9 @@ pub const Book = struct {
     }
 
     /// Insert-or-bump, matching the old `ON CONFLICT DO UPDATE`: hits += 1, last_ts moves,
-    /// and line/col/severity/zig_version take the fresh values.
-    pub fn upsert(b: *Book, fresh: []const Record) !void {
-        return b.upsertTracking(fresh, null);
-    }
-
-    /// `upsert`, also collecting the findings that were NOT already open: new occurrences.
-    pub fn upsertTracking(b: *Book, fresh: []const Record, new: ?*std.ArrayList(Record)) !void {
+    /// and line/col/severity/zig_version take the fresh values. `new`, when given, collects
+    /// the findings that were NOT already open: new occurrences.
+    pub fn upsert(b: *Book, fresh: []const Record, new: ?*std.ArrayList(Record)) !void {
         const a = b.arena.allocator();
         for (fresh) |nr| {
             const existing = for (b.recs.items) |*old| {
@@ -342,16 +338,6 @@ pub const Book = struct {
         }
     }
 
-    /// Drop rows for `file` that the current scan did NOT reproduce — they are fixed.
-    ///
-    /// Scoped by which rule GROUPS actually ran. Booleans for "zsnag ran" and "ast ran" were
-    /// not enough: zsnag exits 0 even when the zephem map failed to load, so the map-backed
-    /// rules produced nothing while the hook believed they had run — and their entire history
-    /// for the file was deleted as "resolved". A group absent from `active` is never pruned.
-    pub fn pruneFile(b: *Book, file: []const u8, fresh: []const Record, active: []const []const u8) void {
-        b.prune(.{ .file = file }, fresh, active);
-    }
-
     /// Which rows a scan speaks for: one file (zsnag, ast-check), or every file under a
     /// project root (the compiler checks the whole project at once).
     pub const Scope = union(enum) {
@@ -366,7 +352,12 @@ pub const Book = struct {
         }
     };
 
-    /// `pruneFile` for any scope.
+    /// Drop rows in `scope` that the current scan did NOT reproduce — they are fixed.
+    ///
+    /// Scoped by which rule GROUPS actually ran. Booleans for "zsnag ran" and "ast ran" were
+    /// not enough: zsnag exits 0 even when the zephem map failed to load, so the map-backed
+    /// rules produced nothing while the hook believed they had run — and their entire history
+    /// for the file was deleted as "resolved". A group absent from `active` is never pruned.
     pub fn prune(b: *Book, scope: Scope, fresh: []const Record, active: []const []const u8) void {
         var i: usize = 0;
         while (i < b.recs.items.len) {

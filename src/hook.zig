@@ -251,21 +251,9 @@ pub fn parseAstCheck(
     }
 }
 
-/// The source line a finding sits on, trimmed — the book's dedup key includes it, so a
-/// finding that moves but stays identical is still one finding.
-pub fn snippetFor(src: []const u8, line_no: u32) []const u8 {
-    if (line_no == 0) return "";
-    var start: usize = 0;
-    var n: u32 = 1;
-    while (n < line_no) : (n += 1) {
-        start = (std.mem.findScalarPos(u8, src, start, '\n') orelse return "") + 1;
-    }
-    const end = std.mem.findScalarPos(u8, src, start, '\n') orelse src.len;
-    return std.mem.trim(u8, src[start..end], " \t\r");
-}
-
-/// Where each line of one file starts, so every finding's snippet is found without counting
-/// lines from the top again. Same answers as `snippetFor`.
+/// Where each line of one file starts, so every finding's snippet (the source line it sits on,
+/// trimmed) is found without counting lines from the top again. The book's dedup key includes
+/// the snippet, so a finding that moves but stays identical is still one finding.
 pub const Lines = struct {
     src: []const u8,
     /// `starts[k]` is the offset of line k + 1.
@@ -512,14 +500,8 @@ pub fn renderResponse(arena: std.mem.Allocator, context: []const u8) ![]u8 {
 /// rendered from that. Without it, a duplicate renders twice AND `Book.upsert` bumps `hits`
 /// twice within a single batch, corrupting a counter documented as "real recurrences, not
 /// repeated saves of a fix".
-pub fn dedup(arena: std.mem.Allocator, src: []const u8, items: []const Finding) ![]Finding {
-    const lines: Lines = try .init(arena, src);
-    defer lines.deinit(arena);
-    return dedupLines(arena, lines, items);
-}
-
-/// `dedup` with the file's line index already built. Each finding's snippet is looked up once.
-pub fn dedupLines(arena: std.mem.Allocator, lines: Lines, items: []const Finding) ![]Finding {
+/// `lines` is the file's line index; each finding's snippet is looked up once.
+pub fn dedup(arena: std.mem.Allocator, lines: Lines, items: []const Finding) ![]Finding {
     var out: std.ArrayList(Finding) = .empty;
     var snips: std.ArrayList([]const u8) = .empty;
     defer snips.deinit(arena);

@@ -697,5 +697,6 @@ fn finish(r: *Report, w: *std.Io.Writer) !void {
 fn isZcanonSkill(text: []const u8) bool {
     if (!std.mem.startsWith(u8, text, "---")) return false;
     const end = std.mem.find(u8, text[3..], "\n---") orelse return false;
-    return std.mem.find(u8, text[0 .. end + 3], "\nname: zcanon\n") != null;
+    // Up to and including the newline that closes the last line, so `name:` may come last.
+    return std.mem.find(u8, text[0 .. end + 4], "\nname: zcanon\n") != null;
 }

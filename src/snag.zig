@@ -36,7 +36,7 @@ pub const Sev = enum {
 };
 
 /// Which checker a rule belongs to. The hook prunes the book per group, so a group that did
-/// not run cannot erase its own history — see `book.pruneFile`.
+/// not run cannot erase its own history — see `book.Book.prune`.
 pub const Group = enum {
     /// Token-based rules; run whenever zsnag runs.
     core,
@@ -330,28 +330,9 @@ pub const Scanner = struct {
     }
 };
 
-pub fn scan(
-    gpa: std.mem.Allocator,
-    path: []const u8,
-    src: [:0]const u8,
-    out: *std.ArrayList(Finding),
-) !void {
-    return scanWithMap(gpa, path, src, out, null);
-}
-
-/// `map` is the companion zephem std map. When supplied, the map-backed rules (R011–R013)
-/// run and their advice is read out of the map rather than written here.
-pub fn scanWithMap(
-    gpa: std.mem.Allocator,
-    path: []const u8,
-    src: [:0]const u8,
-    out: *std.ArrayList(Finding),
-    map: ?*const zephem.Map,
-) !void {
-    return scanWithOpts(gpa, path, src, out, .{ .map = map });
-}
-
 pub const Opts = struct {
+    /// The companion zephem std map. When supplied, the map-backed rules (R011–R013) run and
+    /// their advice is read out of the map rather than written here.
     map: ?*const zephem.Map = null,
     /// `lex(src)` already done by the caller (who also needed it for `mapKeysTokens`), so the
     /// file is tokenized once. Borrowed for the call. Null → the scan lexes it itself.
@@ -524,6 +505,7 @@ fn isTypeDefinition(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool
 /// `buf`) are exactly the common ones.
 fn fnSpans(gpa: std.mem.Allocator, tree: *const std.zig.Ast) ![]Span {
     var spans: std.ArrayList(Span) = .empty;
+    errdefer spans.deinit(gpa);
     for (0..tree.nodes.len) |i| {
         const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(i)); // zsnag:ok — R007: i < nodes.len, a valid node index
         // Test bodies are function bodies too: a leak in a test is still a leak.
@@ -762,7 +744,7 @@ fn scanBigUndefined(gpa: std.mem.Allocator, st: Scanner, tree: *const std.zig.As
         if (enclosing(spans, name_tok) == null) continue;
 
         const n = ev.int(tree, arr.ast.elem_count, 0) orelse continue;
-        const big = if (ev.size(tree, arr.ast.elem_type, 0)) |sz|
+        const big = if (SizeEval.size(tree, arr.ast.elem_type, 0)) |sz|
             n *| sz >= big_undefined_bytes
         else
             n >= big_undefined_elems;
@@ -806,6 +788,8 @@ const SizeEval = struct {
                 const callee = tree.tokenSlice(tree.lastToken(call.ast.fn_expr));
                 if (!eq(callee, "maxInt")) return null;
                 const it = intType(tree, call.ast.params[0], depth + 1) orelse return null;
+                // `i0` is not a type (the compiler rejects it), so it has no maximum.
+                if (it.signed and it.bits == 0) return null;
                 const bits = if (it.signed) it.bits - 1 else it.bits;
                 if (bits >= 64) return std.math.maxInt(u64);
                 return (@as(u64, 1) << @intCast(bits)) - 1; // zsnag:ok — bits < 64, checked above
@@ -835,9 +819,9 @@ const SizeEval = struct {
     }
 
     /// Bytes of one element, for integer/float/bool primitives and aliases of them.
-    fn size(e: *SizeEval, tree: *const Ast, node: Ast.Node.Index, depth: u8) ?u64 {
-        _ = e;
-        if (intType(tree, node, depth)) |it| return (it.bits + 7) / 8;
+    fn size(tree: *const Ast, node: Ast.Node.Index, depth: u8) ?u64 {
+        // Widened first: `u65535` is a legal type, and 65535 + 7 does not fit the u16.
+        if (intType(tree, node, depth)) |it| return (@as(u64, it.bits) + 7) / 8;
         return null;
     }
 

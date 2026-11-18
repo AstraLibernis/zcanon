@@ -347,6 +347,9 @@ const Run = struct {
     /// What the hook's tool call wrote; `.unknown` for `zcanon check` and shell edits.
     authored: hook.Authored = .unknown,
     ledger_failed: ?anyerror = null,
+    /// Held from `load` to `finish` (see `lockLedger`); null before, after, and where the
+    /// filesystem has no locks.
+    ledger_lock: ?std.Io.File = null,
     /// This run's timestamp, "" if the clock is unusable.
     now: []const u8 = "",
     /// Syntax findings by file, so a compiler error that repeats one is not shown twice.
@@ -471,7 +474,8 @@ const Run = struct {
                     for (rep.diags) |d| {
                         const abs = try std.Io.Dir.path.resolveAlloc(c.gpa, &.{ s.root, d.path });
                         const dup = for (r.ast_seen.items) |a| {
-                            const same_file = std.mem.eql(u8, try std.Io.Dir.path.resolveAlloc(c.gpa, &.{a.path}), abs);
+                            // Made absolute: `zcanon check src/a.zig` names the file relatively.
+                            const same_file = std.mem.eql(u8, try vars.absolute(c, a.path), abs);
                             if (same_file and a.f.line == d.line and a.f.col == d.col and std.mem.eql(u8, a.f.message, d.message)) break true;
                         } else false;
                         if (!dup) try diags.append(c.gpa, d);
@@ -525,7 +529,7 @@ const Run = struct {
         // renders twice and double-counts `hits`.
         const lines: hook.Lines = try .init(c.gpa, src);
         defer lines.deinit(c.gpa);
-        const deduped = try hook.dedupLines(c.gpa, lines, findings.items);
+        const deduped = try hook.dedup(c.gpa, lines, findings.items);
         hook.sortFindings(deduped);
 
         var fresh: std.ArrayList(book.Record) = .empty;
@@ -578,7 +582,7 @@ const Run = struct {
         var new: std.ArrayList(book.Record) = .empty;
         try r.ledger.?.expand(scope);
         r.ledger.?.prune(scope, fresh, active);
-        try r.ledger.?.upsertTracking(fresh, &new);
+        try r.ledger.?.upsert(fresh, &new);
         for (new.items) |n| {
             if (first_sight and !r.authored.wrote(n.snippet)) continue;
             try r.history.?.bump(n, r.now);
@@ -592,7 +596,7 @@ const Run = struct {
             var w: std.Io.Writer.Allocating = .init(r.c.gpa);
             var it = r.seen.keyIterator();
             while (it.next()) |k| try w.writer.print("{s}\n", .{k.*});
-            try std.Io.Dir.cwd().writeFile(r.c.io, .{ .sub_path = try sidePath(r.c, "seen.txt"), .data = w.written() });
+            try vars.writeFileAtomic(r.c, try sidePath(r.c, "seen.txt"), w.written());
         }
         try writeHistory(r.c, history);
         try updateBugs(r.c, history.entries.items, r.now);
@@ -601,6 +605,7 @@ const Run = struct {
 
     /// Load the open set and the history (see `loadLedger`).
     fn load(r: *Run) !void {
+        r.ledger_lock = try lockLedger(r.c);
         r.ledger = .init(r.c.gpa);
         r.history = .init(r.c.gpa);
         try loadLedger(r.c, &r.ledger.?, &r.history.?, .lazy);
@@ -618,6 +623,10 @@ const Run = struct {
                 r.ledger_failed = e;
             };
         };
+        if (r.ledger_lock) |f| {
+            f.close(r.c.io);
+            r.ledger_lock = null;
+        }
         const e = r.ledger_failed orelse return "";
         return r.c.gpa.print("\n\n⚠ the book was not updated ({s}) — findings above are still valid.", .{@errorName(e)}) catch "";
     }
@@ -679,17 +688,34 @@ fn sidePath(c: vars.Ctx, name: []const u8) ![]const u8 {
     return std.Io.Dir.path.join(c.gpa, &.{ std.Io.Dir.path.dirname(book_path) orelse ".", name });
 }
 
+/// Take the book's lock, waiting for another run to release it. Every run loads the book,
+/// changes it and writes all of it back, so two at once (parallel tool calls, two sessions)
+/// each wrote over the other's update. Closing the file releases the lock, as does the
+/// process exiting. Null where the filesystem has no file locks: the run goes on unlocked.
+fn lockLedger(c: vars.Ctx) !?std.Io.File {
+    const path = try sidePath(c, "book.lock");
+    try std.Io.Dir.cwd().createDirPath(c.io, std.Io.Dir.path.dirname(path) orelse ".");
+    const f = try std.Io.Dir.cwd().createFile(c.io, path, .{ .truncate = false });
+    errdefer f.close(c.io);
+    f.lock(c.io, .exclusive) catch |e| switch (e) {
+        error.FileLocksUnsupported => {
+            f.close(c.io);
+            return null;
+        },
+        else => |x| return x,
+    };
+    return f;
+}
+
 /// The open set lives beside the book.
 fn openPath(c: vars.Ctx) ![]const u8 {
     return sidePath(c, "open.tsv");
 }
 
 fn writeHistory(c: vars.Ctx, h: *const book.History) !void {
-    const path = try vars.bookPath(c);
-    try std.Io.Dir.cwd().createDirPath(c.io, std.Io.Dir.path.dirname(path) orelse ".");
     var w: std.Io.Writer.Allocating = .init(c.gpa);
     try h.write(&w.writer);
-    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = w.written() });
+    try vars.writeFileAtomic(c, try vars.bookPath(c), w.written());
 }
 
 /// Fold the history into the bug report beside it; rewrite both files only when it changed.
@@ -705,18 +731,16 @@ fn updateBugs(c: vars.Ctx, entries: []const book.Entry, now: []const u8) !void {
 
     var w: std.Io.Writer.Allocating = .init(c.gpa);
     try bugs.write(&w.writer, list.items);
-    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = tsv, .data = w.written() });
+    try vars.writeFileAtomic(c, tsv, w.written());
     var md: std.Io.Writer.Allocating = .init(c.gpa);
     try bugs.render(&md.writer, list.items);
-    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = try std.Io.Dir.path.join(c.gpa, &.{ dir, "bugs.md" }), .data = md.written() });
+    try vars.writeFileAtomic(c, try std.Io.Dir.path.join(c.gpa, &.{ dir, "bugs.md" }), md.written());
 }
 
 fn writeBook(c: vars.Ctx, b: *const book.Book, path: []const u8) !void {
-    const dir = std.Io.Dir.path.dirname(path) orelse ".";
-    try std.Io.Dir.cwd().createDirPath(c.io, dir);
     var w: std.Io.Writer.Allocating = .init(c.gpa);
     try b.write(&w.writer);
-    try std.Io.Dir.cwd().writeFile(c.io, .{ .sub_path = path, .data = w.written() });
+    try vars.writeFileAtomic(c, path, w.written());
 }
 
 // ---- management -----------------------------------------------------------
@@ -1001,6 +1025,8 @@ fn runPublish(c: vars.Ctx, args: []const []const u8) !void {
 }
 
 fn runPrune(c: vars.Ctx) !void {
+    const lock = try lockLedger(c);
+    defer if (lock) |f| f.close(c.io);
     var open: book.Book = .init(c.gpa);
     var history: book.History = .init(c.gpa);
     try loadLedger(c, &open, &history, .full);

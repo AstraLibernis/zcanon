@@ -113,6 +113,22 @@ pub fn absolute(c: Ctx, p: []const u8) ![]const u8 {
     return std.Io.Dir.path.resolveAlloc(c.gpa, &.{ buf[0..n], p });
 }
 
+/// Write `data` to `path` through a temp file beside it and a rename, creating the directory
+/// if needed, so a reader never sees a half-written file and concurrent writers never
+/// interleave into one. The temp file is named after this process's clock.
+pub fn writeFileAtomic(c: Ctx, path: []const u8, data: []const u8) !void {
+    const cwd = std.Io.Dir.cwd();
+    if (std.Io.Dir.path.dirname(path)) |d| try cwd.createDirPath(c.io, d);
+    const now = std.Io.Timestamp.now(c.io, .awake).nanoseconds;
+    const tmp = try c.gpa.print("{s}.{d}.tmp", .{ path, now });
+    defer c.gpa.free(tmp);
+    try cwd.writeFile(c.io, .{ .sub_path = tmp, .data = data });
+    cwd.rename(tmp, cwd, path, c.io) catch |e| {
+        cwd.deleteFile(c.io, tmp) catch {}; // zsnag:ok — best-effort cleanup of our own temp file
+        return e;
+    };
+}
+
 /// Absolute path to this binary, so the installed hook command points at the running build
 /// rather than a guessed checkout. `std.fs.selfExePath` was removed in 0.16; the lookup now
 /// lives on the Io layer.

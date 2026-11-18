@@ -151,16 +151,8 @@ pub const Sandbox = struct {
         return s.runToolEnv("zcanon", args, null, extra);
     }
 
-    fn runTool(s: *Sandbox, tool: []const u8, args: []const []const u8, stdin: ?[]const u8) !Result {
-        return s.runToolEnv(tool, args, stdin, &.{});
-    }
-
-    fn runToolEnv(s: *Sandbox, tool: []const u8, args: []const []const u8, stdin: ?[]const u8, extra: []const [2][]const u8) !Result {
+    fn environ(s: *Sandbox, extra: []const [2][]const u8) !std.process.Environ.Map {
         const a = s.gpa();
-        var argv: std.ArrayList([]const u8) = .empty;
-        try argv.append(a, try std.Io.Dir.path.join(a, &.{ s.bin, tool }));
-        try argv.appendSlice(a, args);
-
         // A MINIMAL environment, built from scratch rather than inherited. Everything zcanon
         // writes is redirected into the sandbox, so a CLI test can never reach the developer's
         // real ~/.claude/settings.json or ~/.config/zcanon even if a path resolution regresses.
@@ -179,6 +171,47 @@ pub const Sandbox = struct {
         for (extra) |kv| try env.put(kv[0], kv[1]);
         // HOME is deliberately absent: if a path ever falls back to it, these tests fail
         // loudly rather than quietly writing to the real home directory.
+        return env;
+    }
+
+    /// Run `zcanon <args...>` once per entry, all at the same time, and wait for every one.
+    /// Returns how many exited 0 or 1 (ran to the end; 1 is "found something blocking").
+    pub fn zcanonAllAtOnce(s: *Sandbox, runs: []const []const []const u8) !usize {
+        const a = s.gpa();
+        var env = try s.environ(&.{});
+        const children = try a.alloc(std.process.Child, runs.len);
+        for (runs, children) |args, *child| {
+            var argv: std.ArrayList([]const u8) = .empty;
+            try argv.append(a, try std.Io.Dir.path.join(a, &.{ s.bin, "zcanon" }));
+            try argv.appendSlice(a, args);
+            child.* = try std.process.spawn(s.io, .{
+                .argv = argv.items,
+                .environ_map = &env,
+                .stdin = .ignore,
+                .stdout = .ignore,
+                .stderr = .ignore,
+            });
+        }
+        var finished: usize = 0;
+        for (children) |*child| switch (try child.wait(s.io)) {
+            .exited => |code| {
+                if (code <= 1) finished += 1;
+            },
+            else => {},
+        };
+        return finished;
+    }
+
+    fn runTool(s: *Sandbox, tool: []const u8, args: []const []const u8, stdin: ?[]const u8) !Result {
+        return s.runToolEnv(tool, args, stdin, &.{});
+    }
+
+    fn runToolEnv(s: *Sandbox, tool: []const u8, args: []const []const u8, stdin: ?[]const u8, extra: []const [2][]const u8) !Result {
+        const a = s.gpa();
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.append(a, try std.Io.Dir.path.join(a, &.{ s.bin, tool }));
+        try argv.appendSlice(a, args);
+        var env = try s.environ(extra);
 
         // `std.process.run` cannot feed stdin, and the hook reads its payload from there — so
         // spawn directly and route all three streams through files in the sandbox. Files

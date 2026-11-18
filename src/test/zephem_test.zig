@@ -114,13 +114,6 @@ test "entry fields land in the right columns" {
     try testing.expectEqualStrings("fn", e.kind);
     try testing.expectEqualStrings("fn parseInt(comptime T: type, buf: []const u8, base: u8) E!T", e.sig);
     try testing.expectEqual(@as(?usize, 3), zephem.arityOf(testing.allocator_instance.allocator(), e.sig).?);
-    try testing.expect(e.isPublic());
-}
-
-test "a private decl is flagged as not callable at that path" {
-    var m = try zephem.parse(testing.allocator, try synthetic(testing.allocator), null);
-    defer m.deinit();
-    try testing.expect(!m.get("std.hidden.thing").?.isPublic());
 }
 
 test "a deprecated entry carries its replacement through to the reader" {

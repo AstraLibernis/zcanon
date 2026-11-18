@@ -106,36 +106,26 @@ test "a diagnostic naming a different file is ignored" {
     try testing.expectEqualStrings("genuine", out.items[0].message);
 }
 
-test "snippet is the trimmed source line" {
-    const src = "line one\n    const x = 1;  \nline three\n";
-    try testing.expectEqualStrings("line one", hook.snippetFor(src, 1));
-    try testing.expectEqualStrings("const x = 1;", hook.snippetFor(src, 2));
-    try testing.expectEqualStrings("line three", hook.snippetFor(src, 3));
-    try testing.expectEqualStrings("", hook.snippetFor(src, 0));
-    try testing.expectEqualStrings("", hook.snippetFor(src, 99));
+/// The line index's answers for lines 0..expected.len of `src`.
+fn expectSnippets(src: []const u8, expected: []const []const u8) !void {
+    const lines: hook.Lines = try .init(testing.allocator, src);
+    defer lines.deinit(testing.allocator);
+    for (expected, 0..) |want, n| try testing.expectEqualStrings(want, lines.snippet(@intCast(n)));
 }
 
-test "the line index answers exactly like snippetFor" {
-    const gpa = testing.allocator;
-    const cases = [_][]const u8{
-        "",
-        "one line, no newline",
-        "a\nb\n",
-        "a\nb",
-        "\n\n\n",
-        "crlf one\r\n\tcrlf two \r\nlast",
-        "  lead\n\n  gap after blank  \n",
-    };
-    for (cases) |src| {
-        const lines: hook.Lines = try .init(gpa, src);
-        defer lines.deinit(gpa);
-        var n: u32 = 0;
-        while (n <= 8) : (n += 1) try testing.expectEqualStrings(hook.snippetFor(src, n), lines.snippet(n));
-    }
-    // And snippetFor itself, on the shapes the index must match.
-    try testing.expectEqualStrings("crlf two", hook.snippetFor("crlf one\r\n\tcrlf two \r\nlast", 2));
-    try testing.expectEqualStrings("", hook.snippetFor("a\nb\n", 3));
-    try testing.expectEqualStrings("b", hook.snippetFor("a\nb", 2));
+test "snippet is the trimmed source line" {
+    // Line 0 does not exist, and neither does one past the end.
+    try expectSnippets("line one\n    const x = 1;  \nline three\n", &.{ "", "line one", "const x = 1;", "line three", "", "" });
+}
+
+test "the line index handles empty files, missing final newlines, blank lines and CRLF" {
+    try expectSnippets("", &.{ "", "", "" });
+    try expectSnippets("one line, no newline", &.{ "", "one line, no newline", "" });
+    try expectSnippets("a\nb\n", &.{ "", "a", "b", "", "" });
+    try expectSnippets("a\nb", &.{ "", "a", "b", "" });
+    try expectSnippets("\n\n\n", &.{ "", "", "", "", "", "" });
+    try expectSnippets("crlf one\r\n\tcrlf two \r\nlast", &.{ "", "crlf one", "crlf two", "last", "" });
+    try expectSnippets("  lead\n\n  gap after blank  \n", &.{ "", "lead", "", "gap after blank", "", "" });
 }
 
 test "context groups by tier in urgency order" {
@@ -265,7 +255,7 @@ test "identical findings on identical source lines collapse to one" {
         .{ .rule = "R010", .severity = "info", .line = 1, .col = 1, .message = "m" },
         .{ .rule = "R010", .severity = "info", .line = 3, .col = 1, .message = "m" },
     };
-    const out = try hook.dedup(a.allocator(), src, &items);
+    const out = try hook.dedup(a.allocator(), try .init(a.allocator(), src), &items);
     try testing.expectEqual(@as(usize, 1), out.len);
     try testing.expectEqual(@as(u32, 1), out[0].line);
 }
@@ -280,7 +270,7 @@ test "dedup keeps findings that differ in rule, message or source line" {
         .{ .rule = "R010", .severity = "info", .line = 1, .col = 1, .message = "other" }, // message differs
         .{ .rule = "R010", .severity = "info", .line = 2, .col = 1, .message = "m" }, // snippet differs
     };
-    const out = try hook.dedup(a.allocator(), src, &items);
+    const out = try hook.dedup(a.allocator(), try .init(a.allocator(), src), &items);
     try testing.expectEqual(@as(usize, 4), out.len);
 }
 

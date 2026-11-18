@@ -7,7 +7,7 @@ const zephem = @import("zcanon").zephem;
 const snag = @import("zcanon").snag;
 
 fn scan(gpa: std.mem.Allocator, src: [:0]const u8, out: *std.ArrayList(snag.Finding)) !void {
-    try snag.scan(gpa, "t.zig", src, out);
+    try snag.scanWithOpts(gpa, "t.zig", src, out, .{});
 }
 
 fn codes(gpa: std.mem.Allocator, src: [:0]const u8) ![]const []const u8 {
@@ -396,7 +396,7 @@ test "JSON output escapes quotes and backslashes in the path (B2)" {
     const gpa = a.allocator();
 
     var out: std.ArrayList(snag.Finding) = .empty;
-    try snag.scan(gpa, "we\"ird\\path.zig", "std.debug.print(\"x\", .{});\n", &out);
+    try snag.scanWithOpts(gpa, "we\"ird\\path.zig", "std.debug.print(\"x\", .{});\n", &out, .{});
 
     var w: std.Io.Writer.Allocating = .init(gpa);
     try snag.renderJson(&w.writer, out.items);
@@ -496,6 +496,11 @@ const rule_cases = [_]RuleCase{
     .{ .name = "r015_product", .want = "R015", .src = "const n = 1000 * 100;\ntest { var b: [n]u8 = undefined; _ = &b; }" },
     .{ .name = "r015_wide_elem", .want = "R015", .src = "test { var b: [10000]u64 = undefined; _ = &b; }" },
     .{ .name = "r015_maxint_struct", .want = "R015", .src = "const std = @import(\"std\");\nconst Idx = u16;\nconst max_bins = std.math.maxInt(Idx);\nconst K = struct { bin: Idx, key: f64 };\nfn f() void { var s: [max_bins]K = undefined; _ = &s; }\ntest { f(); }" },
+    // 8 x 8192 bytes: the widest integer type, whose byte size used to overflow a u16.
+    .{ .name = "r015_widest_int", .want = "R015", .src = "test { var b: [8]u65535 = undefined; _ = &b; }" },
+    .{ .name = "r015_widest_int_neg", .want = "", .src = "test { var b: [4]u65535 = undefined; _ = &b; }" },
+    // `i0` is not a type; the compiler says so, and the linter must not crash getting there.
+    .{ .name = "r015_maxint_i0_neg", .want = "", .src = "const std = @import(\"std\");\nfn f() void { var b: [std.math.maxInt(i0)]u8 = undefined; _ = &b; }\ntest { f(); }" },
     .{ .name = "r015_small_neg", .want = "", .src = "test { var b: [4096]u8 = undefined; _ = &b; }" },
     .{ .name = "r015_global_neg", .want = "", .src = "var g: [100000]u8 = undefined;\ntest { _ = &g; }" },
     .{ .name = "r015_init_neg", .want = "", .src = "test { var b: [70000]u8 = @splat(0); _ = &b; }" },
@@ -506,7 +511,7 @@ test "every rule case fires exactly the rules it should" {
     defer a.deinit();
     for (rule_cases) |c| {
         var out: std.ArrayList(snag.Finding) = .empty;
-        try snag.scan(a.allocator(), "t.zig", c.src, &out);
+        try snag.scanWithOpts(a.allocator(), "t.zig", c.src, &out, .{});
         var got: std.ArrayList(u8) = .empty;
         for (out.items) |f| {
             const code = f.rule().code;

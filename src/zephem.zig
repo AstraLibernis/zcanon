@@ -25,9 +25,6 @@ const Col = struct {
     const kind = 2;
     const sig = 6;
     const doc = 7;
-    const rdetail = 9;
-    const canon = 10;
-    const vis = 14;
     const count = 16;
 };
 
@@ -38,14 +35,6 @@ pub const Entry = struct {
     kind: []const u8,
     sig: []const u8,
     doc: []const u8,
-    rdetail: []const u8,
-    canon: []const u8,
-    vis: []const u8,
-
-    /// `[priv]` decls exist in the map but are not callable at the shown path.
-    pub fn isPublic(e: Entry) bool {
-        return !std.mem.eql(u8, e.vis, "priv");
-    }
 };
 
 pub const LoadError = error{
@@ -204,8 +193,9 @@ pub fn load(c: vars.Ctx, wanted: ?*const Keys) LoadError!Map {
     errdefer file.close(c.io);
     const st = try file.stat(c.io);
     if (st.size == 0) {
+        const empty = try parse(c.gpa, &.{}, wanted);
         file.close(c.io);
-        return parse(c.gpa, &.{}, wanted);
+        return empty;
     }
     var mm = try std.Io.File.MemoryMap.create(c.io, file, .{
         .len = std.math.cast(usize, st.size) orelse return error.OutOfMemory,
@@ -269,9 +259,6 @@ fn addRow(gpa: std.mem.Allocator, idx: *std.StringHashMapUnmanaged(Entry), line:
         .kind = f[Col.kind],
         .sig = f[Col.sig],
         .doc = f[Col.doc],
-        .rdetail = f[Col.rdetail],
-        .canon = f[Col.canon],
-        .vis = f[Col.vis],
     });
 }
 
@@ -321,15 +308,7 @@ fn saveIndex(c: vars.Ctx, key: mapindex.Key, text: []const u8) void {
     defer c.gpa.free(bytes);
     const path = indexPath(c) catch return;
     defer c.gpa.free(path);
-    const now = std.Io.Timestamp.now(c.io, .awake).nanoseconds;
-    const tmp = c.gpa.print("{s}.{d}.tmp", .{ path, now }) catch return;
-    defer c.gpa.free(tmp);
-    const cwd = std.Io.Dir.cwd();
-    if (std.Io.Dir.path.dirname(path)) |d| cwd.createDirPath(c.io, d) catch return;
-    cwd.writeFile(c.io, .{ .sub_path = tmp, .data = bytes }) catch return;
-    cwd.rename(tmp, cwd, path, c.io) catch {
-        cwd.deleteFile(c.io, tmp) catch {}; // zsnag:ok — best-effort cleanup of our own temp file
-    };
+    vars.writeFileAtomic(c, path, bytes) catch return;
 }
 
 pub const remedy =

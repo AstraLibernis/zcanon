@@ -76,12 +76,15 @@ pub const Collector = struct {
             if (seen.line == d.line and seen.col == d.col and std.mem.eql(u8, seen.path, d.path) and
                 std.mem.eql(u8, seen.severity, d.severity) and std.mem.eql(u8, seen.message, d.message)) return false;
         }
+        // Room in both lists first, so the string is never owned by one list and freed by an
+        // error path as well.
+        try k.strings.ensureUnusedCapacity(k.gpa, 1);
+        try k.diags.ensureUnusedCapacity(k.gpa, 1);
         const owned = try k.gpa.dupe(u8, trimmed);
-        errdefer k.gpa.free(owned);
-        try k.strings.append(k.gpa, owned);
+        k.strings.appendAssumeCapacity(owned);
         var copy = parseDiagLine(owned).?;
         copy.severity = if (std.mem.eql(u8, d.severity, "error")) "error" else "note";
-        try k.diags.append(k.gpa, copy);
+        k.diags.appendAssumeCapacity(copy);
         return false;
     }
 };
