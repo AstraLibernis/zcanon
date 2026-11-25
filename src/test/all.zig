@@ -17,4 +17,5 @@ test {
     _ = @import("semantic_test.zig");
     _ = @import("publish_test.zig");
     _ = @import("advice_test.zig");
+    _ = @import("stdio_test.zig");
 }

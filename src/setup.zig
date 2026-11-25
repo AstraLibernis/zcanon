@@ -22,6 +22,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vars = @import("vars.zig");
+const stdio = @import("stdio.zig");
 const settings = @import("settings.zig");
 const zephem = @import("zephem.zig");
 const book = @import("book.zig");
@@ -73,7 +74,7 @@ const PROBE_SRC =
 
 pub fn run(c: vars.Ctx, mode: Mode, args: []const []const u8) !void {
     var buf: [1 << 14]u8 = undefined;
-    var fw = std.Io.File.stdout().writerStreaming(c.io, &buf);
+    var fw = stdio.stdout().writerStreaming(c.io, &buf);
     const w = &fw.interface;
 
     if (args.len > 0) {
@@ -593,7 +594,7 @@ fn lastLines(s: []const u8, n: usize) []const u8 {
 /// a copy of the user's own settings.
 pub fn uninstall(c: vars.Ctx, args: []const []const u8) !void {
     var buf: [1 << 13]u8 = undefined;
-    var fw = std.Io.File.stdout().writerStreaming(c.io, &buf);
+    var fw = stdio.stdout().writerStreaming(c.io, &buf);
     const w = &fw.interface;
 
     var purge = false;

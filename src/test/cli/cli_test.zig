@@ -892,6 +892,26 @@ test "cli: a Bash run finds edits anywhere under home, ignoring cd and ~" {
     try testing.expect(std.mem.find(u8, ctx, "search for edited .zig files stopped") == null);
 }
 
+test "cli: a Bash run skips the .zig files Zig itself writes (dependencies, Windows global cache)" {
+    var s = try box("bash-zig-owned");
+    defer s.deinit();
+    const env = try bashHome(&s);
+
+    _ = try s.write("home/ws/mine.zig", dirty_zig);
+    _ = try s.write("home/ws/zig-pkg/dep-0.1.0-abc/src/dep.zig", dirty_zig);
+    _ = try s.write("home/AppData/Local/zig/b/0123/builtin.zig", dirty_zig);
+    try touchAfterStamp(&s, "home/ws/mine.zig", 1);
+    try touchAfterStamp(&s, "home/ws/zig-pkg/dep-0.1.0-abc/src/dep.zig", 1);
+    try touchAfterStamp(&s, "home/AppData/Local/zig/b/0123/builtin.zig", 1);
+    const r = try s.hookBash(try s.path("home/ws"), "zig build", &env);
+    const ctx = (try h.additionalContext(s.gpa(), r.stdout)).?;
+    try testing.expect(std.mem.find(u8, ctx, "mine.zig") != null);
+    try testing.expect(std.mem.find(u8, ctx, "dep.zig") == null);
+    // Only Windows keeps Zig's global cache there; elsewhere it is an ordinary directory.
+    const cache_seen = std.mem.find(u8, ctx, "builtin.zig") != null;
+    try testing.expectEqual(@import("builtin").os.tag != .windows, cache_seen);
+}
+
 test "cli: a Bash run that changed many .zig files checks the newest and lists the rest" {
     var s = try box("bash-newest");
     defer s.deinit();

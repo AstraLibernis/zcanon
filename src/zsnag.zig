@@ -15,6 +15,7 @@ const std = @import("std");
 const snag = @import("snag.zig");
 const zephem = @import("zephem.zig");
 const vars = @import("vars.zig");
+const stdio = @import("stdio.zig");
 
 const usage =
     \\usage: zsnag [--json] [--no-map] [--no-check-existence] [--list-rules] file.zig ...
@@ -31,7 +32,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     var out_buf: [1 << 16]u8 = undefined;
-    var ow = std.Io.File.stdout().writerStreaming(io, &out_buf);
+    var ow = stdio.stdout().writerStreaming(io, &out_buf);
     const out = &ow.interface;
 
     var json = false;
@@ -161,7 +162,7 @@ fn zigVersion(c: vars.Ctx) []const u8 {
 
 fn stderr(io: std.Io, comptime fmt: []const u8, args: anytype) !void {
     var buf: [1024]u8 = undefined;
-    var w = std.Io.File.stderr().writerStreaming(io, &buf);
+    var w = stdio.stderr().writerStreaming(io, &buf);
     try w.interface.print(fmt, args);
     try w.interface.flush();
 }

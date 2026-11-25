@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vars = @import("vars.zig");
+const stdio = @import("stdio.zig");
 const settings = @import("settings.zig");
 const hook = @import("hook.zig");
 const book = @import("book.zig");
@@ -85,12 +86,12 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn stdout(c: vars.Ctx, buf: []u8) std.Io.File.Writer {
-    return std.Io.File.stdout().writerStreaming(c.io, buf);
+    return stdio.stdout().writerStreaming(c.io, buf);
 }
 
 fn fail(c: vars.Ctx, msg: []const u8) !void {
     var buf: [2048]u8 = undefined;
-    var w = std.Io.File.stderr().writerStreaming(c.io, &buf);
+    var w = stdio.stderr().writerStreaming(c.io, &buf);
     try w.interface.writeAll(msg);
     try w.interface.flush();
     std.process.exit(2);
@@ -183,11 +184,19 @@ fn addNotices(gpa: std.mem.Allocator, notices: *std.ArrayList([]const u8), new: 
 const max_bash_files = 20;
 const max_walk_entries = 500_000;
 
-/// Directories never walked: build output, caches, VCS and dependency trees.
-fn skipDir(name: []const u8) bool {
+/// Directories never walked: build output, caches, VCS and dependency trees. `path` is the
+/// directory's path below the walk's root, `name` its last component.
+fn skipDir(path: []const u8, name: []const u8) bool {
     if (name.len > 0 and name[0] == '.') return true; // .git, .zig-cache, .venv, …
-    const skip = [_][]const u8{ "zig-out", "zig-cache", "node_modules", "target", "__pycache__" };
+    // zig-pkg: where `zig build` unpacks a project's dependencies (Zig 0.17).
+    const skip = [_][]const u8{ "zig-out", "zig-cache", "zig-pkg", "node_modules", "target", "__pycache__" };
     for (skip) |d| if (std.mem.eql(u8, name, d)) return true;
+    // Zig's global cache is %LOCALAPPDATA%\zig on Windows, outside any dot directory; every
+    // build writes generated .zig files (builtin.zig) there.
+    if (builtin.os.tag == .windows and std.ascii.eqlIgnoreCase(name, "zig")) {
+        const parent = std.Io.Dir.path.dirname(path) orelse return false;
+        return std.ascii.eqlIgnoreCase(std.Io.Dir.path.basename(parent), "Local");
+    }
     return false;
 }
 
@@ -217,7 +226,7 @@ fn changedZig(c: vars.Ctx, roots: []const []const u8, since: i96, out: *std.Arra
                 break :roots;
             }
             switch (entry.kind) {
-                .directory => if (!skipDir(entry.basename)) walker.enter(c.io, entry) catch {}, // zsnag:ok — an unreadable directory is skipped, not fatal
+                .directory => if (!skipDir(entry.path, entry.basename)) walker.enter(c.io, entry) catch {}, // zsnag:ok — an unreadable directory is skipped, not fatal
                 .file => {
                     if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
                     const st = dir.statFile(c.io, entry.path, .{}) catch continue;
