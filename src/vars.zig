@@ -132,7 +132,11 @@ pub fn writeFileAtomic(c: Ctx, path: []const u8, data: []const u8) !void {
 /// Absolute path to this binary, so the installed hook command points at the running build
 /// rather than a guessed checkout. `std.fs.selfExePath` was removed in 0.16; the lookup now
 /// lives on the Io layer.
+/// On Windows `ZCANON_SELF` overrides: the daemon runs from a copy of zcanon (a running .exe
+/// cannot be replaced, so `zig build` would fail while it runs) and must still answer, and find
+/// zephem and zsnag, as the original.
 pub fn selfExe(c: Ctx) ![:0]u8 {
+    if (builtin.os.tag == .windows) if (c.get("ZCANON_SELF")) |p| return c.gpa.dupeSentinel(u8, p, 0);
     return std.process.executablePathAlloc(c.io, c.gpa);
 }
 

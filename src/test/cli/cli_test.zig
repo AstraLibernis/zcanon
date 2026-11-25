@@ -647,13 +647,7 @@ test "cli: add-check restores build.zig when the result does not build" {
     try testing.expectEqualStrings(own, try s.read("proj/build.zig"));
 }
 
-/// The daemon is switched off on Windows (`daemon.enabled`): its tests skip there.
-fn skipWithoutDaemon() !void {
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
-}
-
 test "cli: the daemon reports a type error ast-check cannot see, in a project with no check step" {
-    try skipWithoutDaemon();
     var s = try box("daemon");
     defer s.deinit();
     // No `check` step and no add-check: the daemon checks through its own build file, and the
@@ -765,7 +759,6 @@ test "cli: zsnag rejects unknown flags instead of reading them as files" {
 // project against its old build graph after build.zig changed (a module added to
 // build.zig was still "no module named …"). It must restart the watcher on its own.
 test "cli: the daemon picks up a changed build.zig without being restarted" {
-    try skipWithoutDaemon();
     var s = try box("daemon-buildzig");
     defer s.deinit();
     const main = try s.write("proj/main.zig", "const opts = @import(\"opts\");\npub fn main() void {\n    _ = opts.x;\n}\n");
@@ -808,7 +801,6 @@ test "cli: the daemon picks up a changed build.zig without being restarted" {
 // B34, second half: while a project did not build, the daemon waited for build.zig only,
 // so fixing a broken build.zig.zon was never noticed.
 test "cli: the daemon recovers when only build.zig.zon is fixed" {
-    try skipWithoutDaemon();
     var s = try box("daemon-zon");
     defer s.deinit();
     const main = try s.write("proj/main.zig", "pub fn main() void {}\n");

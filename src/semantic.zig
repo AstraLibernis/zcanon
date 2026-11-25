@@ -10,6 +10,7 @@
 //! calls, fields) and skips codegen. Kept warm with -fincremental it re-checks a project in
 //! ~10 ms per edit, against ~240 ms cold.
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Diag = struct {
     /// As the compiler printed it: relative to the build root, or absolute.
@@ -150,6 +151,8 @@ const twins_body =
 pub fn writeWrapper(gpa: std.mem.Allocator, io: std.Io, dir: []const u8, root: []const u8, targets: []const []const u8) !void {
     try std.Io.Dir.cwd().createDirPath(io, dir);
     const rel = try std.Io.Dir.path.relativeAlloc(gpa, "/", null, dir, root);
+    // A zon string reads `\` as an escape; Zig takes `/` on every OS.
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, rel, '\\', '/');
 
     var build: std.ArrayList(u8) = .empty;
     try build.appendSlice(gpa,

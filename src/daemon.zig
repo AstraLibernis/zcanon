@@ -34,17 +34,22 @@ pub const version_line = "zcanon-daemon 1";
 /// Exit after this long without a request.
 const idle_ns: i96 = 30 * std.time.ns_per_min;
 
-/// The daemon is off on Windows (untested there) and when `ZCANON_DAEMON=0` — the CLI tests
-/// set that so a test never leaves a process behind; the hook then does everything itself.
+/// The daemon is off when `ZCANON_DAEMON=0` — the CLI tests set that so a test never leaves a
+/// process behind; the hook then does everything itself.
 pub fn enabled(c: vars.Ctx) bool {
-    if (builtin.os.tag == .windows) return false;
     const v = c.get("ZCANON_DAEMON") orelse return true;
     return !std.mem.eql(u8, v, "0");
 }
 
 /// `<config>/d/<hash of root>`: `.sock` for the socket, `.lock` held for the daemon's life.
+/// Absolute on Windows, whose Unix sockets refuse a relative path (a relative `ZCANON_CONFIG`,
+/// as the CLI tests use). Elsewhere it stays as given: shorter against the 108-byte limit.
 fn basePath(c: vars.Ctx, root: []const u8) ![]u8 {
-    const dir = try vars.configDir(c);
+    var dir = try vars.configDir(c);
+    if (builtin.os.tag == .windows and !std.Io.Dir.path.isAbsolute(dir)) {
+        const cwd = try std.process.currentPathAlloc(c.io, c.gpa);
+        dir = try std.Io.Dir.path.resolveAlloc(c.gpa, &.{ cwd, dir });
+    }
     var name: [16]u8 = undefined;
     _ = std.mem.print(&name, "{x:0>16}", .{std.hash.Wyhash.hash(0, root)}) catch unreachable; // zsnag:ok — 16 hex digits fit exactly
     return std.Io.Dir.path.join(c.gpa, &.{ dir, "d", &name });
@@ -166,15 +171,121 @@ fn requestInner(c: vars.Ctx, root: []const u8, cmd: Cmd, keys: ?*const zephem.Ke
 /// only means the next edit falls back again.
 pub fn start(c: vars.Ctx, root: []const u8) void {
     const self = vars.selfExe(c) catch return;
+    if (builtin.os.tag == .windows) return startFromCopy(c, root, self) catch {}; // zsnag:ok — best-effort, see doc comment
     _ = std.process.spawn(c.io, .{
         .argv = &.{ self, "daemon", root },
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,
-        // Its own process group: it must outlive the hook that started it.
+        // Its own process group: it must outlive the hook that started it. (A Windows child
+        // outlives its parent by default.)
         .pgid = vars.own_process_group,
+        .create_no_window = true,
     }) catch return;
 }
+
+/// Windows: run the daemon from `<config>/d/run-<hash of this build's stamp>.exe`, because a
+/// running .exe cannot be replaced and `zig build` of zcanon would fail while a daemon runs.
+/// `ZCANON_SELF` makes the copy answer as the original, so a rebuilt zcanon still finds it
+/// `stale`. Copies of older builds are deleted when no daemon runs them any more (a running one
+/// refuses deletion and is left for next time).
+fn startFromCopy(c: vars.Ctx, root: []const u8, self: []const u8) !void {
+    const d_dir = std.Io.Dir.path.dirname(try basePath(c, root)) orelse return error.NoConfigDir;
+    var name: [24]u8 = undefined;
+    const run_name = try std.mem.print(&name, "run-{x:0>16}.exe", .{std.hash.Wyhash.hash(0, try exeStamp(c))});
+    const copy = try std.Io.Dir.path.join(c.gpa, &.{ d_dir, run_name });
+
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(c.io, d_dir);
+    cwd.access(c.io, copy, .{}) catch try std.Io.Dir.copyFile(cwd, self, cwd, copy, c.io, .{});
+
+    var dir = try cwd.openDir(c.io, d_dir, .{ .iterate = true });
+    defer dir.close(c.io);
+    var it = dir.iterate();
+    while (it.next(c.io) catch null) |e| {
+        if (e.kind != .file or std.mem.eql(u8, e.name, run_name)) continue;
+        if (!std.mem.startsWith(u8, e.name, "run-") or !std.mem.endsWith(u8, e.name, ".exe")) continue;
+        dir.deleteFile(c.io, e.name) catch {}; // zsnag:ok — still running: left for next time
+    }
+
+    var env = try c.env.clone(c.gpa);
+    try env.put("ZCANON_SELF", self);
+    _ = try std.process.spawn(c.io, .{
+        .argv = &.{ copy, "daemon", root },
+        .environ_map = &env,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = true,
+    });
+}
+
+/// Windows has no process groups. The watcher and everything it starts (the build runner, the
+/// compiler) run in a job object the daemon owns instead: `killWatcher` ends the whole tree at
+/// once, and kill-on-close ends it if the daemon itself dies. The job nests inside whatever job
+/// the daemon runs in; it never leaves it.
+const winjob = if (builtin.os.tag == .windows) struct {
+    const w = std.os.windows;
+    pub const Handle = w.HANDLE;
+
+    const BasicLimit = extern struct {
+        PerProcessUserTimeLimit: i64 = 0,
+        PerJobUserTimeLimit: i64 = 0,
+        LimitFlags: u32 = 0,
+        MinimumWorkingSetSize: usize = 0,
+        MaximumWorkingSetSize: usize = 0,
+        ActiveProcessLimit: u32 = 0,
+        Affinity: usize = 0,
+        PriorityClass: u32 = 0,
+        SchedulingClass: u32 = 0,
+    };
+    /// JOBOBJECT_EXTENDED_LIMIT_INFORMATION.
+    const ExtendedLimit = extern struct {
+        basic: BasicLimit = .{},
+        io_counters: [6]u64 = @splat(0),
+        ProcessMemoryLimit: usize = 0,
+        JobMemoryLimit: usize = 0,
+        PeakProcessMemoryUsed: usize = 0,
+        PeakJobMemoryUsed: usize = 0,
+    };
+    comptime {
+        if (@sizeOf(usize) == 8 and @sizeOf(ExtendedLimit) != 144) @compileError("JOBOBJECT_EXTENDED_LIMIT_INFORMATION layout");
+    }
+    const limit_kill_on_job_close: u32 = 0x2000;
+    const class_extended_limit: c_int = 9;
+    const resume_failed: u32 = 0xFFFF_FFFF;
+
+    extern "kernel32" fn CreateJobObjectW(attributes: ?*anyopaque, name: ?[*:0]const u16) callconv(.winapi) ?w.HANDLE;
+    extern "kernel32" fn SetInformationJobObject(job: w.HANDLE, class: c_int, info: *const anyopaque, len: u32) callconv(.winapi) c_int;
+    extern "kernel32" fn AssignProcessToJobObject(job: w.HANDLE, process: w.HANDLE) callconv(.winapi) c_int;
+    extern "kernel32" fn TerminateJobObject(job: w.HANDLE, exit_code: u32) callconv(.winapi) c_int;
+    extern "kernel32" fn ResumeThread(thread: w.HANDLE) callconv(.winapi) u32;
+
+    /// A new kill-on-close job, or null.
+    pub fn create() ?w.HANDLE {
+        const job = CreateJobObjectW(null, null) orelse return null;
+        const info: ExtendedLimit = .{ .basic = .{ .LimitFlags = limit_kill_on_job_close } };
+        if (SetInformationJobObject(job, class_extended_limit, &info, @sizeOf(ExtendedLimit)) == 0) {
+            w.CloseHandle(job);
+            return null;
+        }
+        return job;
+    }
+
+    /// Put a child started suspended into `job`, then let it run. False: it was not resumed.
+    pub fn adopt(job: w.HANDLE, process: w.HANDLE, thread: w.HANDLE) bool {
+        if (AssignProcessToJobObject(job, process) == 0) return false;
+        return ResumeThread(thread) != resume_failed;
+    }
+
+    /// End every process in `job` and release it.
+    pub fn end(job: w.HANDLE) void {
+        _ = TerminateJobObject(job, 1);
+        w.CloseHandle(job);
+    }
+} else struct {
+    pub const Handle = void;
+};
 
 // ---- server ------------------------------------------------------------------
 
@@ -200,6 +311,8 @@ const Daemon = struct {
     diag_text: std.ArrayList([]u8) = .empty,
     /// Read and cleared by three threads; guarded by `mutex`.
     watcher_pid: ?std.posix.pid_t = null,
+    /// Windows: the job the watcher runs in; taken and ended together with `watcher_pid`.
+    watcher_job: ?winjob.Handle = null,
     /// Set by any thread, read by all of them.
     stopping: std.atomic.Value(bool) = .init(false),
     /// Set by `buildFileLoop` when it stops the watcher on purpose.
@@ -389,7 +502,13 @@ const Daemon = struct {
         const targets = try semantic.readTargets(d.c.gpa, d.c.io, try targetsPath(d.c), d.root);
         if (has and targets.len == 0) return d.root;
         const base = try basePath(d.c, d.root);
-        const dir = try vars.absolute(d.c, try std.Io.Dir.path.join(d.c.gpa, &.{ std.Io.Dir.path.dirname(std.Io.Dir.path.dirname(base).?).?, "wrap", std.Io.Dir.path.basename(base) }));
+        // Windows: a zon path dependency must be relative, and none reaches another drive (the
+        // config directory on C:, a project on D:), so the wrapper lives in the project's own
+        // cache directory there.
+        const dir = if (builtin.os.tag == .windows)
+            try std.Io.Dir.path.join(d.c.gpa, &.{ d.root, ".zig-cache", "zcanon-wrap" })
+        else
+            try vars.absolute(d.c, try std.Io.Dir.path.join(d.c.gpa, &.{ std.Io.Dir.path.dirname(std.Io.Dir.path.dirname(base).?).?, "wrap", std.Io.Dir.path.basename(base) }));
         try semantic.writeWrapper(d.c.gpa, d.c.io, dir, d.root, targets);
         return dir;
     }
@@ -439,9 +558,23 @@ const Daemon = struct {
             .stdout = .ignore,
             .stderr = .pipe,
             .pgid = vars.own_process_group, // so `killWatcher` can signal the whole group
+            // Windows: into the job before it can start anything (see `winjob`).
+            .start_suspended = builtin.os.tag == .windows,
+            .create_no_window = true,
         });
+        var job: ?winjob.Handle = null;
+        if (builtin.os.tag == .windows) {
+            const j = winjob.create();
+            if (j == null or !winjob.adopt(j.?, child.id.?, child.thread_handle)) {
+                if (j) |x| winjob.end(x);
+                child.kill(d.c.io);
+                return error.JobObject;
+            }
+            job = j;
+        }
         d.lock();
         d.watcher_pid = child.id;
+        d.watcher_job = job;
         d.unlock();
         defer {
             d.killWatcher();
@@ -475,16 +608,19 @@ const Daemon = struct {
     }
 
     /// The watcher and everything it started (the build runner, the compiler) share its
-    /// process group.
+    /// process group, or on Windows its job.
     fn killWatcher(d: *Daemon) void {
         d.lock();
         const taken = d.watcher_pid;
+        const job = d.watcher_job;
         d.watcher_pid = null;
+        d.watcher_job = null;
         d.unlock();
+        if (builtin.os.tag == .windows) {
+            if (job) |j| winjob.end(j);
+            return;
+        }
         const pid = taken orelse return;
-        // No process groups on Windows; unreachable there today (`enabled` is false on Windows).
-        // Porting the daemon means a job object here.
-        if (builtin.os.tag == .windows) return;
         std.posix.kill(-pid, .TERM) catch {}; // zsnag:ok — already gone is fine
         reapOrphans(d.c.io);
     }
