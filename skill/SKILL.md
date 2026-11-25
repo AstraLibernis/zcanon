@@ -55,7 +55,7 @@ per-project background process on the first `.zig` edit. It keeps Zig's incremen
 running (`zig build check --watch -fincremental`), and every hook reports the latest result as
 `▲ [compile] path:line:col  message`. The hook never waits for the compiler, so an edit's own
 errors usually arrive with the *next* edit, and a result that predates the edit says so. The
-process exits after 30 idle minutes. `{{ZCANON}} daemon status` / `daemon stop` inspect or stop it.
+process exits after 2 idle minutes. `{{ZCANON}} daemon status` / `daemon stop` inspect or stop it.
 - Any project with a build.zig is covered, with nothing to set up. zcanon uses the project's own
   `check` step when it has one. Otherwise it writes its own build file under
   `~/.config/zcanon/wrap/`, which loads the project as a dependency; the project's build.zig

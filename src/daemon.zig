@@ -2,7 +2,7 @@
 // Copyright (C) 2026 AstraLibernis
 
 //! The background process: one per project, started by the hook on first use and gone after
-//! 30 idle minutes. It keeps two things warm that each hook run would otherwise pay for:
+//! 2 idle minutes. It keeps two things warm that each hook run would otherwise pay for:
 //!
 //!   - the zephem map, fully indexed once, so a hook asks for its rows instead of scanning
 //!     the 9.5 MB table (~1.8 ms) on every edit;
@@ -31,8 +31,9 @@ const semantic = @import("semantic.zig");
 
 pub const version_line = "zcanon-daemon 1";
 
-/// Exit after this long without a request.
-const idle_ns: i96 = 30 * std.time.ns_per_min;
+/// Exit after this long without a request. Short (owner, 2026-11-25): a restart costs only the
+/// first edit's compiler result, which then arrives with the next edit.
+const idle_ns: i96 = 2 * std.time.ns_per_min;
 
 /// The daemon is off when `ZCANON_DAEMON=0` — the CLI tests set that so a test never leaves a
 /// process behind; the hook then does everything itself.

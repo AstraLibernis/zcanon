@@ -110,7 +110,7 @@ that project. It does two things:
 - keeps the zephem map loaded, which cuts the hook itself from ~3 ms to ~1.2 ms.
 
 The hook reports the compiler's latest result and never waits for it, so an edit's errors show
-up on the next edit. The process exits after 30 idle minutes, answers only to the zcanon binary
+up on the next edit. The process exits after 2 idle minutes, answers only to the zcanon binary
 that started it (a rebuilt zcanon replaces it), and on any problem the hook simply does all the
 work itself. `zcanon daemon status [dir]` and `zcanon daemon stop [dir]` inspect or stop it.
 
