@@ -121,11 +121,13 @@ pub fn exePath(c: vars.Ctx, home: []const u8) ![]u8 {
     return std.Io.Dir.path.join(c.gpa, &.{ home, "zig-out", "bin", name });
 }
 
-/// zephem's dataset directory, for the PINNED stamp.
+/// zephem's dataset directory, for the PINNED stamp: its live map for this OS (zephem keeps
+/// Windows's in `data/std-windows`, see its `vars.map_name`).
 pub fn dataDir(c: vars.Ctx) !?[]u8 {
     if (c.get("ZEPHEM_DATA")) |p| return try c.gpa.dupe(u8, p);
     const home = locateHome(c) orelse return null;
-    return try std.Io.Dir.path.join(c.gpa, &.{ home.path, "data", "std" });
+    const map = if (builtin.os.tag == .windows) "std-windows" else "std";
+    return try std.Io.Dir.path.join(c.gpa, &.{ home.path, "data", map });
 }
 
 pub const Map = struct {

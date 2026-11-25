@@ -57,9 +57,10 @@ running (`zig build check --watch -fincremental`), and every hook reports the la
 errors usually arrive with the *next* edit, and a result that predates the edit says so. The
 process exits after 2 idle minutes. `{{ZCANON}} daemon status` / `daemon stop` inspect or stop it.
 - Any project with a build.zig is covered, with nothing to set up. zcanon uses the project's own
-  `check` step when it has one. Otherwise it writes its own build file under
-  `~/.config/zcanon/wrap/`, which loads the project as a dependency; the project's build.zig
-  is only read. A project with no build.zig gets the syntax and footgun checks only.
+  `check` step when it has one, rerun after every edit, so a `check` step must only type-check
+  (never name a slow gate or a test run `check`). Otherwise it writes its own build file under
+  `~/.config/zcanon/wrap/` (Windows: `<project>/.zig-cache/zcanon-wrap/`), which loads the
+  project as a dependency; the project's build.zig is only read. A project with no build.zig gets the syntax and footgun checks only.
 - It checks for the host OS. Code built only for another OS (a Windows GUI checked on Linux) is
   not analysed unless that target is added: `{{ZCANON}} targets <project> x86_64-windows`.
 - `zig build check` only analyses code reachable from the project's artifacts and tests; an

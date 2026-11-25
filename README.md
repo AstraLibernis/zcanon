@@ -104,9 +104,13 @@ that project. It does two things:
 
 - keeps Zig's incremental compiler running (`zig build check --watch -fincremental`), which
   re-checks the whole project in ~10 ms after an edit (~1-2 s for the first check). It uses
-  the project's own `check` step if there is one. Otherwise zcanon writes a build file of its
-  own under `~/.config/zcanon/wrap/` that loads the project as a dependency and adds the step
-  there, so every project with a build.zig is covered and none is edited;
+  the project's own `check` step if there is one, so that step must only type-check (compile
+  without emitting or running anything): it reruns after every edit. A slow gate belongs under
+  another name (zephem's is `zig build verify`). Otherwise zcanon writes a build file of its
+  own under `~/.config/zcanon/wrap/` (on Windows `<project>/.zig-cache/zcanon-wrap/`, since a
+  zon path dependency must be relative and none crosses drives) that loads the project as a
+  dependency and adds the step there, so every project with a build.zig is covered and none is
+  edited;
 - keeps the zephem map loaded, which cuts the hook itself from ~3 ms to ~1.2 ms.
 
 The hook reports the compiler's latest result and never waits for it, so an edit's errors show
